@@ -1,0 +1,15 @@
+# 아이 사진·결과물은 절대 저장소에 넣지 않는다
+photos/
+output/
+*.jpg
+*.jpeg
+*.png
+*.heic
+*.mp4
+
+# 생일 등 개인 설정
+.env
+*.local.*
+
+__pycache__/
+.venv/
