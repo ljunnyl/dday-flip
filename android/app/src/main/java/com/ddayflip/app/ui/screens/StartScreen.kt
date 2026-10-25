@@ -1,5 +1,10 @@
 package com.ddayflip.app.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,10 +16,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.ddayflip.app.core.domain.DdayStartRule
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 
 /**
@@ -25,12 +33,47 @@ import java.time.LocalDate
 fun StartScreen(
     onStartScan: (birthday: LocalDate, rule: DdayStartRule) -> Unit = { _, _ -> }
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+
     var birthdayYear by remember { mutableStateOf("2024") }
     var birthdayMonth by remember { mutableStateOf("05") }
     var birthdayDay by remember { mutableStateOf("27") }
     var selectedRule by remember { mutableStateOf(DdayStartRule.ONE_BASED) }
 
+    // 안드로이드 버전에 따른 권한 결정 (API 33+ READ_MEDIA_IMAGES, API 32 이하 READ_EXTERNAL_STORAGE)
+    val requiredPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.READ_MEDIA_IMAGES
+    } else {
+        Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+
+    fun proceedToScan() {
+        val y = birthdayYear.toIntOrNull() ?: 2024
+        val m = birthdayMonth.toIntOrNull() ?: 1
+        val d = birthdayDay.toIntOrNull() ?: 1
+        val birthday = LocalDate.of(y, m, d)
+        onStartScan(birthday, selectedRule)
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            proceedToScan()
+        } else {
+            scope.launch {
+                snackbarHostState.showSnackbar(
+                    message = "갤러리 사진을 분석하려면 사진 접근 권한이 필요합니다.",
+                    withDismissAction = true
+                )
+            }
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("D-day Flip", fontWeight = FontWeight.Bold) },
@@ -155,11 +198,12 @@ fun StartScreen(
             // Start Scanning Button
             Button(
                 onClick = {
-                    val y = birthdayYear.toIntOrNull() ?: 2024
-                    val m = birthdayMonth.toIntOrNull() ?: 1
-                    val d = birthdayDay.toIntOrNull() ?: 1
-                    val birthday = LocalDate.of(y, m, d)
-                    onStartScan(birthday, selectedRule)
+                    val permissionStatus = ContextCompat.checkSelfPermission(context, requiredPermission)
+                    if (permissionStatus == PackageManager.PERMISSION_GRANTED) {
+                        proceedToScan()
+                    } else {
+                        permissionLauncher.launch(requiredPermission)
+                    }
                 },
                 modifier = Modifier
                     .fillMaxWidth()

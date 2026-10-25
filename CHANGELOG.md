@@ -5,6 +5,13 @@
 ## [Unreleased]
 
 ### Added
+- 갤러리 사진 접근 권한 및 로컬 미디어스토어(MediaStore) 불러오기 연동
+  - GalleryPhoto: 사진 ID, Content URI, 촬영일시(epoch/LocalDate), 가로세로 규격, 회전 각도 및 가로 판별 메타데이터 모델
+  - PhotoRepository & MediaStorePhotoRepository: MediaStore Images.Media.EXTERNAL_CONTENT_URI 기반 특정 날짜 구간(LocalDate 시작~종료) 비동기 쿼리 및 매핑 구현체
+  - StartScreen: Android 13+(READ_MEDIA_IMAGES) 및 레거시(READ_EXTERNAL_STORAGE) 런타임 권한 요청 런처 및 거부 시 안내 처리
+  - ScanScreen & MainActivity: 생일 기준 150일 탐색 범위 설정 및 MediaStore 연동 실시간 스캔 프로그레스 연결
+  - MediaStorePhotoRepositoryTest: 날짜 범위 변환, 윤년 계산, Selection 쿼리 매핑 및 데이터 모델 단위 테스트 6종 추가 (총 20개 테스트 전건 통과)
+  > 💡 **의도:** 100% 온디바이스 개인정보 보호 철칙을 준수하며 외부 통신 없이 기기 갤러리의 특정 일자 범위 사진만을 안전하게 비동기로 쿼리하여 후속 OCR/품질 선별 파이프라인으로 전달하는 기반 마련.
 - 2단계 안드로이드 앱 프로젝트 구조 및 코어 도메인 로직 구현
   - `DdayCalculator`: EXIF 기반 생일 및 심야(00~04시) 보정 D-day 계산 로직
   - `CalendarSequenceValidator`: 연속일 달력 미넘김 감지, 결측일(gap) 감지, 노이즈 OCR 필터링
