@@ -61,6 +61,9 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material:material-icons-extended")
 
+    // Google ML Kit Text Recognition (On-device)
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+
     // Testing
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.junit.jupiter:junit-jupiter-api:5.10.2")

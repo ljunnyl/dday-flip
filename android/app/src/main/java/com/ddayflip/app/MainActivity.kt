@@ -9,6 +9,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import com.ddayflip.app.core.domain.DdayStartRule
+import com.ddayflip.app.core.domain.SequenceValidationResult
 import com.ddayflip.app.data.MediaStorePhotoRepository
 import com.ddayflip.app.domain.repository.PhotoRepository
 import com.ddayflip.app.ui.screens.CompleteScreen
@@ -43,6 +44,9 @@ class MainActivity : ComponentActivity() {
                     var scanStartDate by remember { mutableStateOf(LocalDate.now().minusDays(150)) }
                     var scanEndDate by remember { mutableStateOf(LocalDate.now()) }
                     var ddayRule by remember { mutableStateOf(DdayStartRule.ONE_BASED) }
+                    var validationResult by remember {
+                        mutableStateOf<SequenceValidationResult?>(null)
+                    }
 
                     when (currentScreen) {
                         AppScreen.START -> {
@@ -60,14 +64,20 @@ class MainActivity : ComponentActivity() {
                             ScanScreen(
                                 startDate = scanStartDate,
                                 endDate = scanEndDate,
+                                birthday = scanStartDate,
+                                ddayRule = ddayRule,
                                 photoRepository = photoRepository,
-                                onNavigateToReview = {
+                                onNavigateToReview = { result ->
+                                    validationResult = result
                                     currentScreen = AppScreen.REVIEW
                                 }
                             )
                         }
                         AppScreen.REVIEW -> {
+                            val result = validationResult
                             ReviewScreen(
+                                issues = result?.issues ?: emptyList(),
+                                entries = result?.validatedEntries ?: emptyList(),
                                 onProceedToExport = {
                                     currentScreen = AppScreen.COMPLETE
                                 }
