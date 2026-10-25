@@ -13,9 +13,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ddayflip.app.data.MediaStorePhotoRepository
+import com.ddayflip.app.domain.model.GalleryPhoto
+import com.ddayflip.app.domain.repository.PhotoRepository
+import kotlinx.coroutines.delay
+import java.time.LocalDate
 
 /**
  * 02. 온디바이스 스캔 및 프로그레스 화면
@@ -23,14 +29,60 @@ import androidx.compose.ui.unit.sp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ScanScreen(
-    totalPhotos: Int = 140,
-    processedPhotos: Int = 140,
-    detectedCalendarPhotos: Int = 110,
+    startDate: LocalDate = LocalDate.now().minusDays(150),
+    endDate: LocalDate = LocalDate.now(),
+    photoRepository: PhotoRepository? = null,
     onNavigateToReview: () -> Unit = {}
 ) {
-    val progress = if (totalPhotos > 0) processedPhotos.toFloat() / totalPhotos.toFloat() else 0f
+    val context = LocalContext.current
+    val repository = photoRepository ?: remember { MediaStorePhotoRepository(context) }
+
+    var totalPhotos by remember { mutableIntStateOf(0) }
+    var processedPhotos by remember { mutableIntStateOf(0) }
+    var detectedCalendarPhotos by remember { mutableIntStateOf(0) }
+    var isScanning by remember { mutableStateOf(true) }
+    var scannedPhotos by remember { mutableStateOf<List<GalleryPhoto>>(emptyList()) }
+
+    LaunchedEffect(startDate, endDate) {
+        isScanning = true
+        processedPhotos = 0
+        detectedCalendarPhotos = 0
+
+        // MediaStore에서 시작일~종료일 구간의 사진 비동기 조회
+        val photos = repository.getPhotosBetween(startDate, endDate)
+        scannedPhotos = photos
+        totalPhotos = photos.size
+
+        if (photos.isEmpty()) {
+            // 해당 기간에 사진이 없는 경우
+            processedPhotos = 0
+            isScanning = false
+        } else {
+            // 로컬 온디바이스 스캔 진행률 실시간 시뮬레이션/표시
+            val batchStep = maxOf(1, photos.size / 20)
+            for (i in 1..photos.size) {
+                processedPhotos = i
+                // 대략 80% 정도의 사진이 달력 사진으로 감지되는 시뮬레이션 상태
+                if (i % 5 != 0) {
+                    detectedCalendarPhotos++
+                }
+                if (i % batchStep == 0 || i == photos.size) {
+                    delay(20) // UI 반응성 및 진행 애니메이션 효과
+                }
+            }
+            isScanning = false
+        }
+    }
+
+    val progress = if (totalPhotos > 0) {
+        processedPhotos.toFloat() / totalPhotos.toFloat()
+    } else if (!isScanning) {
+        1f
+    } else {
+        0f
+    }
     val animatedProgress by animateFloatAsState(targetValue = progress, label = "scan_progress")
-    val isComplete = processedPhotos >= totalPhotos && totalPhotos > 0
+    val isComplete = !isScanning && (processedPhotos >= totalPhotos)
 
     Scaffold(
         topBar = {
@@ -72,7 +124,11 @@ fun ScanScreen(
                 }
 
                 Text(
-                    text = if (isComplete) "스캔 및 분석 완료!" else "갤러리 사진을 분석하는 중...",
+                    text = if (isComplete) {
+                        if (totalPhotos == 0) "해당 기간에 촬영된 사진이 없습니다" else "스캔 및 분석 완료!"
+                    } else {
+                        "갤러리 사진을 분석하는 중..."
+                    },
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -99,7 +155,7 @@ fun ScanScreen(
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "$processedPhotos / $totalPhotos 장",
+                            text = if (totalPhotos > 0) "$processedPhotos / $totalPhotos 장" else "0 장",
                             fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -123,12 +179,12 @@ fun ScanScreen(
                         StepItem(
                             stepNumber = "2",
                             title = "온디바이스 OCR 달력 인식 ($detectedCalendarPhotos 장 발견)",
-                            isDone = processedPhotos > 50
+                            isDone = processedPhotos > 0
                         )
                         StepItem(
                             stepNumber = "3",
                             title = "Laplacian 분산 기반 최고 화질 사진 1장 선별",
-                            isDone = isComplete
+                            isDone = isComplete && totalPhotos > 0
                         )
                     }
                 }
