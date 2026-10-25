@@ -16,8 +16,10 @@ __pycache__/
 
 # Android build outputs & local caches
 .gradle/
+.kotlin/
 build/
 android/.gradle/
+android/.kotlin/
 android/app/build/
 android/build/
 android/local.properties

@@ -1,5 +1,9 @@
 package com.ddayflip.app.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import androidx.annotation.OptIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -12,25 +16,59 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.FileProvider
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
+import com.ddayflip.app.domain.video.MediaCodecVideoExporter
+import com.ddayflip.app.domain.video.VideoExporter
+import java.io.File
 
 /**
  * 04. 완성된 영상 재생 및 저장 화면
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(UnstableApi::class)
+@ExperimentalMaterial3Api
 @Composable
 fun CompleteScreen(
+    videoFile: File? = null,
     videoDurationSeconds: Double = 8.0,
     totalFrames: Int = 120,
     videoResolution: String = "1080x1920 (9:16 FHD)",
-    onSaveToGallery: () -> Unit = {},
-    onShare: () -> Unit = {},
+    videoExporter: VideoExporter = MediaCodecVideoExporter(),
     onRestart: () -> Unit = {}
 ) {
-    var isPlaying by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    var isSavedToGallery by remember { mutableStateOf(false) }
+
+    // Media3 ExoPlayer 설정
+    val exoPlayer = remember {
+        ExoPlayer.Builder(context).build().apply {
+            repeatMode = Player.REPEAT_MODE_ALL
+            playWhenReady = true
+        }
+    }
+
+    DisposableEffect(videoFile) {
+        if (videoFile != null && videoFile.exists()) {
+            val mediaItem = MediaItem.fromUri(Uri.fromFile(videoFile))
+            exoPlayer.setMediaItem(mediaItem)
+            exoPlayer.prepare()
+        }
+        onDispose {
+            exoPlayer.release()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -58,37 +96,44 @@ fun CompleteScreen(
                     fontWeight = FontWeight.Bold
                 )
 
-                // Simulated 9:16 Video Player Container
+                // 9:16 Media3 ExoPlayer 재생 화면
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.7f)
                         .aspectRatio(9f / 16f)
-                        .background(Color.Black, RoundedCornerShape(16.dp)),
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.Black),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        IconButton(
-                            onClick = { isPlaying = !isPlaying },
-                            modifier = Modifier
-                                .size(56.dp)
-                                .background(Color.White.copy(alpha = 0.2f), RoundedCornerShape(28.dp))
+                    if (videoFile != null && videoFile.exists()) {
+                        AndroidView(
+                            factory = { ctx ->
+                                PlayerView(ctx).apply {
+                                    player = exoPlayer
+                                    useController = false
+                                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.PlayArrow,
-                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                contentDescription = null,
                                 tint = Color.White,
                                 modifier = Modifier.size(36.dp)
                             )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "미리보기 영상 대기 중",
+                                color = Color.White,
+                                fontSize = 12.sp
+                            )
                         }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = if (isPlaying) "재생 중..." else "미리보기 탭",
-                            color = Color.White,
-                            fontSize = 12.sp
-                        )
                     }
                 }
 
@@ -126,7 +171,23 @@ fun CompleteScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Button(
-                    onClick = onSaveToGallery,
+                    onClick = {
+                        if (videoFile != null && videoFile.exists()) {
+                            val savedUri = videoExporter.saveVideoToGallery(context, videoFile)
+                            if (savedUri != null) {
+                                isSavedToGallery = true
+                                Toast.makeText(
+                                    context,
+                                    "갤러리에 저장되었습니다! (Movies/DdayFlip)",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            } else {
+                                Toast.makeText(context, "갤러리 저장에 실패했습니다.", Toast.LENGTH_SHORT).show()
+                            }
+                        } else {
+                            Toast.makeText(context, "저장할 비디오 파일이 없습니다.", Toast.LENGTH_SHORT).show()
+                        }
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp),
@@ -134,11 +195,35 @@ fun CompleteScreen(
                 ) {
                     Icon(Icons.Default.FileDownload, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("갤러리에 저장", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = if (isSavedToGallery) "갤러리 저장 완료" else "갤러리에 저장",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
 
                 OutlinedButton(
-                    onClick = onShare,
+                    onClick = {
+                        if (videoFile != null && videoFile.exists()) {
+                            try {
+                                val contentUri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    videoFile
+                                )
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "video/mp4"
+                                    putExtra(Intent.EXTRA_STREAM, contentUri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(Intent.createChooser(shareIntent, "D-day 플립 영상 공유"))
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "영상 공유 실패: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        } else {
+                            Toast.makeText(context, "공유할 비디오 파일이 없습니다.", Toast.LENGTH_SHORT).show()
+                        }
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(52.dp),
