@@ -13,3 +13,14 @@ output/
 
 __pycache__/
 .venv/
+
+# Android build outputs & local caches
+.gradle/
+build/
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/.idea/
+*.iml
+
