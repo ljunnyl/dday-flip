@@ -5,6 +5,14 @@
 ## [Unreleased]
 
 ### Added
+- 실제 넘김 영상(MP4) H.264 인코딩 생성 및 미디어스토어 갤러리 저장/공유 파이프라인
+  - `VideoExportConfig`: 해상도(기본 1080x1920 9:16 세로 릴스 규격), 30fps, 사진당 0.6초(18프레임), D-day 뱃지 오버레이 위치/비율 및 FIT_CENTER 피팅 순수 계산 로직
+  - `DdayVideoRenderer`: 사진 원본을 9:16 중앙에 FIT_CENTER 배치하고 하단에 D-day 뱃지(라운드 사각형 + 볼드 라벨) 오버레이 합성 비트맵 생성 및 고속 NV12(YUV420SP) 변환
+  - `VideoExporter` & `MediaCodecVideoExporter`: MediaCodec(H.264/AVC) + MediaMuxer 기반 하드웨어 비디오 인코딩 파이프라인 및 scoped storage 호환 `MediaStore.Video.Media` 갤러리 저장 메서드 구현
+  - `ReviewScreen`: 영상 생성 버튼 클릭 시 비디오 인코딩 실행 및 실시간 진행률(0~100%) 다이얼로그 표시, 완료 파일 전달
+  - `CompleteScreen`: AndroidView + Media3 ExoPlayer (`PlayerView`) 기반 완성 영상 반복 자동재생 미리보기, 실제 갤러리(Movies/DdayFlip) 저장 토스트 및 FileProvider를 통한 시스템 공유(`ACTION_SEND`) 연동
+  - `VideoExportConfigTest`: 총 프레임 수, 재생시간(ms), 하단 중앙 뱃지 좌표, 정사각/세로형 이미지 FIT_CENTER 피팅 TDD 검증 단위 테스트 6종 통과
+  > 💡 **의도:** 선별된 성장 사진들을 부모가 소장하거나 인스타 릴스 등에 바로 공유할 수 있도록, 외부 서버 없이 기기 내부에서 고화질(1080x1920) H.264 MP4 넘김 영상으로 생성하고 갤러리 영구 저장 및 공유를 지원.
 - 온디바이스(Google ML Kit) D-day 숫자 자동 인식 엔진 및 실시간 스캔 UI 연동
   - DdayTextParser: D+xxx, D-xxx, D xxx, xxx일, 단독 숫자 등 다양한 달력 표기 파싱, 연도/시간/해상도 노이즈 필터링, expectedDay 거리 가중치 기반 신뢰도(Confidence) 산출 순수 Kotlin 로직 구현
   - MlKitDdayScanner: Google ML Kit TextRecognition 온디바이스 텍스트 인식 엔진 연동, 상단 35% 타일링 우선 감지(고신뢰도 조기 반환) 및 전체 영역 fallback 전략 적용, 코루틴 비동기 suspend 처리

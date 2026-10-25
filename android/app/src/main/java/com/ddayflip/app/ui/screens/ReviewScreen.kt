@@ -1,5 +1,6 @@
 package com.ddayflip.app.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -16,12 +17,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ddayflip.app.core.domain.CalendarPhotoEntry
 import com.ddayflip.app.core.domain.IssueType
 import com.ddayflip.app.core.domain.SequenceIssue
+import com.ddayflip.app.domain.video.MediaCodecVideoExporter
+import com.ddayflip.app.domain.video.VideoExporter
+import kotlinx.coroutines.launch
+import java.io.File
 import java.time.LocalDate
 
 /**
@@ -48,8 +54,48 @@ fun ReviewScreen(
         CalendarPhotoEntry(id = "2", effectiveDate = LocalDate.of(2024, 6, 2), exifDday = 11, ocrDday = 10, sharpnessScore = 118.0),
         CalendarPhotoEntry(id = "3", effectiveDate = LocalDate.of(2024, 6, 5), exifDday = 14, ocrDday = 14, sharpnessScore = 165.0)
     ),
-    onProceedToExport: () -> Unit = {}
+    videoExporter: VideoExporter? = null,
+    onProceedToExport: (File) -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val exporter = videoExporter ?: remember { MediaCodecVideoExporter() }
+
+    var isExporting by remember { mutableStateOf(false) }
+    var exportProgress by remember { mutableFloatStateOf(0f) }
+
+    if (isExporting) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("D-day 플립 영상 제작 중", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("선별된 ${entries.size}장의 사진을 고화질(1080x1920) 비디오로 인코딩하고 있습니다...", fontSize = 14.sp)
+                    LinearProgressIndicator(
+                        progress = { exportProgress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp),
+                        strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                    )
+                    Text(
+                        text = "${(exportProgress * 100).toInt()}% 완료",
+                        modifier = Modifier.align(Alignment.End),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -67,7 +113,37 @@ fun ReviewScreen(
                         .padding(16.dp)
                 ) {
                     Button(
-                        onClick = onProceedToExport,
+                        onClick = {
+                            if (entries.isEmpty()) {
+                                Toast.makeText(context, "선별된 사진이 없습니다.", Toast.LENGTH_SHORT).show()
+                                return@Button
+                            }
+                            isExporting = true
+                            exportProgress = 0f
+                            coroutineScope.launch {
+                                val outputFile = File(
+                                    context.cacheDir,
+                                    "dday_flip_${System.currentTimeMillis()}.mp4"
+                                )
+                                val result = exporter.exportVideo(
+                                    context = context,
+                                    entries = entries,
+                                    outputFile = outputFile,
+                                    onProgress = { p -> exportProgress = p }
+                                )
+                                isExporting = false
+                                result.onSuccess { file ->
+                                    onProceedToExport(file)
+                                }.onFailure { err ->
+                                    Toast.makeText(
+                                        context,
+                                        "영상 생성 실패: ${err.localizedMessage ?: "알 수 없는 오류"}",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        },
+                        enabled = !isExporting && entries.isNotEmpty(),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp),
@@ -126,7 +202,7 @@ fun ReviewScreen(
 
             item {
                 Text(
-                    text = "일자별 최적 사진 타임라인",
+                    text = "일자별 최적 사진 타임라인 (${entries.size}장)",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(top = 12.dp)

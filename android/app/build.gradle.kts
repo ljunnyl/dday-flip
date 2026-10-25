@@ -64,6 +64,11 @@ dependencies {
     // Google ML Kit Text Recognition (On-device)
     implementation("com.google.mlkit:text-recognition:16.0.1")
 
+    // Media3 (Transformer, ExoPlayer, UI)
+    implementation("androidx.media3:media3-transformer:1.4.1")
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
+
     // Testing
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.junit.jupiter:junit-jupiter-api:5.10.2")

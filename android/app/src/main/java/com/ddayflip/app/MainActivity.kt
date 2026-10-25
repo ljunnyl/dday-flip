@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
@@ -12,11 +13,13 @@ import com.ddayflip.app.core.domain.DdayStartRule
 import com.ddayflip.app.core.domain.SequenceValidationResult
 import com.ddayflip.app.data.MediaStorePhotoRepository
 import com.ddayflip.app.domain.repository.PhotoRepository
+import com.ddayflip.app.domain.video.VideoExportConfig
 import com.ddayflip.app.ui.screens.CompleteScreen
 import com.ddayflip.app.ui.screens.ReviewScreen
 import com.ddayflip.app.ui.screens.ScanScreen
 import com.ddayflip.app.ui.screens.StartScreen
 import com.ddayflip.app.ui.theme.DdayFlipTheme
+import java.io.File
 import java.time.LocalDate
 
 enum class AppScreen {
@@ -32,6 +35,7 @@ class MainActivity : ComponentActivity() {
         MediaStorePhotoRepository(applicationContext)
     }
 
+    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -47,6 +51,8 @@ class MainActivity : ComponentActivity() {
                     var validationResult by remember {
                         mutableStateOf<SequenceValidationResult?>(null)
                     }
+                    var exportedVideoFile by remember { mutableStateOf<File?>(null) }
+                    val exportConfig = remember { VideoExportConfig() }
 
                     when (currentScreen) {
                         AppScreen.START -> {
@@ -78,14 +84,24 @@ class MainActivity : ComponentActivity() {
                             ReviewScreen(
                                 issues = result?.issues ?: emptyList(),
                                 entries = result?.validatedEntries ?: emptyList(),
-                                onProceedToExport = {
+                                onProceedToExport = { file ->
+                                    exportedVideoFile = file
                                     currentScreen = AppScreen.COMPLETE
                                 }
                             )
                         }
                         AppScreen.COMPLETE -> {
+                            val entries = validationResult?.validatedEntries ?: emptyList()
+                            val totalFrames = exportConfig.calculateTotalFrames(entries.size)
+                            val durationSeconds = exportConfig.calculateDurationMs(entries.size) / 1000.0
+
                             CompleteScreen(
+                                videoFile = exportedVideoFile,
+                                videoDurationSeconds = durationSeconds,
+                                totalFrames = totalFrames,
                                 onRestart = {
+                                    exportedVideoFile = null
+                                    validationResult = null
                                     currentScreen = AppScreen.START
                                 }
                             )
