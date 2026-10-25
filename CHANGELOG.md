@@ -5,6 +5,12 @@
 ## [Unreleased]
 
 ### Added
+- 온디바이스(Google ML Kit) D-day 숫자 자동 인식 엔진 및 실시간 스캔 UI 연동
+  - DdayTextParser: D+xxx, D-xxx, D xxx, xxx일, 단독 숫자 등 다양한 달력 표기 파싱, 연도/시간/해상도 노이즈 필터링, expectedDay 거리 가중치 기반 신뢰도(Confidence) 산출 순수 Kotlin 로직 구현
+  - MlKitDdayScanner: Google ML Kit TextRecognition 온디바이스 텍스트 인식 엔진 연동, 상단 35% 타일링 우선 감지(고신뢰도 조기 반환) 및 전체 영역 fallback 전략 적용, 코루틴 비동기 suspend 처리
+  - ScanScreen & MainActivity: MediaStore 사진 순차 탐색, EXIF D-day 계산 및 온디바이스 OCR 스캔 실시간 진행률(0~100%), 감지된 D-day 상태 표시 및 완료 후 ReviewScreen 연동
+  - DdayTextParserTest: 명시적 패턴, 줄바꿈/다중 줄, 노이즈 필터링, expectedDay 최적 후보 선별, 실패 케이스 등 TDD 단위 테스트 추가 및 검증 완료
+  > 💡 **의도:** 외부 네트워크 전송 없이 기기 내부 프로세서만으로 아기 D-day 달력 숫자를 고속·고정밀 인식하고 실시간 진행 상태를 부모 사용자에게 직관적으로 피드백.
 - 갤러리 사진 접근 권한 및 로컬 미디어스토어(MediaStore) 불러오기 연동
   - GalleryPhoto: 사진 ID, Content URI, 촬영일시(epoch/LocalDate), 가로세로 규격, 회전 각도 및 가로 판별 메타데이터 모델
   - PhotoRepository & MediaStorePhotoRepository: MediaStore Images.Media.EXTERNAL_CONTENT_URI 기반 특정 날짜 구간(LocalDate 시작~종료) 비동기 쿼리 및 매핑 구현체

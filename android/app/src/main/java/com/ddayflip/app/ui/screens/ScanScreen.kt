@@ -1,5 +1,9 @@
 package com.ddayflip.app.ui.screens
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -17,61 +21,117 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ddayflip.app.core.domain.CalendarPhotoEntry
+import com.ddayflip.app.core.domain.CalendarSequenceValidator
+import com.ddayflip.app.core.domain.DdayCalculator
+import com.ddayflip.app.core.domain.DdayStartRule
+import com.ddayflip.app.core.domain.SequenceValidationResult
 import com.ddayflip.app.data.MediaStorePhotoRepository
-import com.ddayflip.app.domain.model.GalleryPhoto
+import com.ddayflip.app.domain.ocr.DdayScanner
+import com.ddayflip.app.domain.ocr.MlKitDdayScanner
 import com.ddayflip.app.domain.repository.PhotoRepository
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneId
 
 /**
- * 02. 온디바이스 스캔 및 프로그레스 화면
+ * 02. 온디바이스 OCR 스캔 및 실시간 진행 화면
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ScanScreen(
     startDate: LocalDate = LocalDate.now().minusDays(150),
     endDate: LocalDate = LocalDate.now(),
+    birthday: LocalDate = startDate,
+    ddayRule: DdayStartRule = DdayStartRule.ONE_BASED,
     photoRepository: PhotoRepository? = null,
-    onNavigateToReview: () -> Unit = {}
+    ddayScanner: DdayScanner? = null,
+    onNavigateToReview: (SequenceValidationResult) -> Unit = {}
 ) {
     val context = LocalContext.current
     val repository = photoRepository ?: remember { MediaStorePhotoRepository(context) }
+    val scanner = ddayScanner ?: remember { MlKitDdayScanner() }
+    val ddayCalculator = remember(birthday, ddayRule) {
+        DdayCalculator(birthday = birthday, rule = ddayRule)
+    }
 
     var totalPhotos by remember { mutableIntStateOf(0) }
     var processedPhotos by remember { mutableIntStateOf(0) }
     var detectedCalendarPhotos by remember { mutableIntStateOf(0) }
+    var currentStatusText by remember { mutableStateOf("스캔 준비 중...") }
     var isScanning by remember { mutableStateOf(true) }
-    var scannedPhotos by remember { mutableStateOf<List<GalleryPhoto>>(emptyList()) }
+    var validationResult by remember {
+        mutableStateOf(SequenceValidationResult(emptyList(), emptyList(), emptyList()))
+    }
 
     LaunchedEffect(startDate, endDate) {
         isScanning = true
         processedPhotos = 0
         detectedCalendarPhotos = 0
+        currentStatusText = "갤러리 사진 목록을 불러오는 중..."
 
-        // MediaStore에서 시작일~종료일 구간의 사진 비동기 조회
-        val photos = repository.getPhotosBetween(startDate, endDate)
-        scannedPhotos = photos
+        val photos = withContext(Dispatchers.IO) {
+            repository.getPhotosBetween(startDate, endDate)
+        }
         totalPhotos = photos.size
 
         if (photos.isEmpty()) {
-            // 해당 기간에 사진이 없는 경우
-            processedPhotos = 0
+            currentStatusText = "해당 기간에 촬영된 사진이 없습니다."
             isScanning = false
-        } else {
-            // 로컬 온디바이스 스캔 진행률 실시간 시뮬레이션/표시
-            val batchStep = maxOf(1, photos.size / 20)
-            for (i in 1..photos.size) {
-                processedPhotos = i
-                // 대략 80% 정도의 사진이 달력 사진으로 감지되는 시뮬레이션 상태
-                if (i % 5 != 0) {
-                    detectedCalendarPhotos++
-                }
-                if (i % batchStep == 0 || i == photos.size) {
-                    delay(20) // UI 반응성 및 진행 애니메이션 효과
-                }
-            }
-            isScanning = false
+            return@LaunchedEffect
         }
+
+        val entries = mutableListOf<CalendarPhotoEntry>()
+
+        for ((index, photo) in photos.withIndex()) {
+            processedPhotos = index + 1
+
+            // 1. 촬영 시간 기반 EXIF D-day 계산 (00~04시 심야 보정 포함)
+            val photoDateTime = LocalDateTime.ofInstant(
+                Instant.ofEpochMilli(photo.dateTakenMs),
+                ZoneId.systemDefault()
+            )
+            val calcResult = ddayCalculator.calculate(photoDateTime)
+            val expectedDday = calcResult.dday
+
+            currentStatusText = "사진 분석 중 (${index + 1}/${photos.size}): EXIF D+$expectedDday"
+
+            // 2. 비트맵 디코딩 및 온디바이스 OCR 스캔
+            val bitmap = withContext(Dispatchers.IO) {
+                loadScaledBitmap(context, photo.contentUri)
+            }
+
+            var detectedDday: Int? = null
+            if (bitmap != null) {
+                val ocrResult = scanner.scanDday(bitmap, expectedDay = expectedDday)
+                if (ocrResult != null) {
+                    detectedDday = ocrResult.dday
+                    detectedCalendarPhotos++
+                    currentStatusText = "현재 사진: D+$detectedDday 감지됨 (신뢰도 ${(ocrResult.confidence * 100).toInt()}%)"
+                }
+                bitmap.recycle()
+            }
+
+            entries.add(
+                CalendarPhotoEntry(
+                    id = photo.id.toString(),
+                    effectiveDate = calcResult.effectiveDate,
+                    exifDday = expectedDday,
+                    ocrDday = detectedDday,
+                    resolvedDday = detectedDday ?: expectedDday,
+                    photoUri = photo.contentUri.toString()
+                )
+            )
+        }
+
+        // 3. 전체 시퀀스 스마트 검증 (결측일, 미넘김 의심 등)
+        val validator = CalendarSequenceValidator()
+        validationResult = validator.validateSequence(entries)
+        currentStatusText = "분석 완료: 총 ${photos.size}장 중 ${detectedCalendarPhotos}장 D-day 인식"
+        isScanning = false
     }
 
     val progress = if (totalPhotos > 0) {
@@ -133,6 +193,13 @@ fun ScanScreen(
                     fontWeight = FontWeight.Bold
                 )
 
+                // Current Live Status Text
+                Text(
+                    text = currentStatusText,
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
                 // Progress Bar
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -178,12 +245,12 @@ fun ScanScreen(
                         )
                         StepItem(
                             stepNumber = "2",
-                            title = "온디바이스 OCR 달력 인식 ($detectedCalendarPhotos 장 발견)",
-                            isDone = processedPhotos > 0
+                            title = "온디바이스 OCR 달력 인식 ($detectedCalendarPhotos 장 감지)",
+                            isDone = detectedCalendarPhotos > 0 || (isComplete && totalPhotos > 0)
                         )
                         StepItem(
                             stepNumber = "3",
-                            title = "Laplacian 분산 기반 최고 화질 사진 1장 선별",
+                            title = "연속성 검증 (미넘김/누락일 감지: ${validationResult.issues.size}건)",
                             isDone = isComplete && totalPhotos > 0
                         )
                     }
@@ -214,8 +281,8 @@ fun ScanScreen(
 
             // Bottom Action Button
             Button(
-                onClick = onNavigateToReview,
-                enabled = isComplete,
+                onClick = { onNavigateToReview(validationResult) },
+                enabled = isComplete && totalPhotos > 0,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
@@ -244,5 +311,32 @@ private fun StepItem(stepNumber: String, title: String, isDone: Boolean) {
             fontWeight = if (isDone) FontWeight.SemiBold else FontWeight.Normal,
             color = if (isDone) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+/**
+ * 메모리 절약을 위한 스케일 다운 비트맵 디코딩 헬퍼
+ */
+private fun loadScaledBitmap(context: Context, uri: Uri, targetMaxDim: Int = 1200): Bitmap? {
+    return try {
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+            BitmapFactory.decodeStream(stream, null, options)
+            val maxDim = maxOf(options.outWidth, options.outHeight)
+            var sampleSize = 1
+            while (maxDim / (sampleSize * 2) >= targetMaxDim) {
+                sampleSize *= 2
+            }
+            val decodeOptions = BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+            }
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                BitmapFactory.decodeStream(inputStream, null, decodeOptions)
+            }
+        }
+    } catch (e: Exception) {
+        null
     }
 }
