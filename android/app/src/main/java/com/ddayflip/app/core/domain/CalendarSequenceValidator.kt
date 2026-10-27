@@ -4,7 +4,7 @@ import java.time.LocalDate
 import kotlin.math.abs
 
 /**
- * Represents a photo entry associated with a calendar day.
+ * D-day 달력 사진 엔트리.
  */
 data class CalendarPhotoEntry(
     val id: String,
@@ -17,9 +17,9 @@ data class CalendarPhotoEntry(
 )
 
 enum class IssueType {
-    UNFLIPPED_CALENDAR, // 달력 미넘김 감지 (날짜가 바뀌었으나 동일 D-day 표시)
-    MISSING_DAYS,       // 결측일 감지 (건너뛴 일자 존재)
-    DISCREPANCY         // EXIF 계산일자와 OCR 인식일자 불일치
+    UNFLIPPED_CALENDAR, // D-day 달력 미넘김 감지 (날짜가 바뀌었으나 동일 D-day 표시)
+    MISSING_DAYS,       // D-day 달력 결측일 감지 (건너뛴 일자 존재)
+    DISCREPANCY         // EXIF 계산일자와 D-day 달력 OCR 인식일자 불일치
 }
 
 data class SequenceIssue(
@@ -39,18 +39,18 @@ data class SequenceValidationResult(
 class CalendarSequenceValidator {
 
     /**
-     * Filters OCR text tokens to extract valid D-day numbers within plausible range of expected EXIF D-day.
-     * Excludes noise such as year numbers (e.g. 2024), phone numbers, or out-of-range digits.
+     * OCR 감지 텍스트 토큰 중 EXIF D-day 기준 허용 오차 범위 내의 유효 D-day 숫자를 추출.
+     * 연도(예: 2024), 전화번호 등 노이즈 숫자를 배제.
      *
-     * @param rawCandidates List of OCR detected text strings in the calendar ROI
-     * @param expectedDday The expected D-day calculated from EXIF date
-     * @param tolerance Allowed delta around expected D-day (default: 5)
-     * @return Plausible D-day integer, or null if no candidate falls within range
+     * @param rawCandidates D-day 달력 영역에서 검출된 OCR 텍스트 목록
+     * @param expectedDday EXIF 날짜로부터 계산된 예상 D-day
+     * @param tolerance 예상 D-day 기준 허용 편차 (기본값: 3)
+     * @return 유효한 D-day 정수, 또는 범위 내 후보가 없는 경우 null
      */
     fun filterNoiseOcr(
         rawCandidates: List<String>,
         expectedDday: Int,
-        tolerance: Int = 5
+        tolerance: Int = 3
     ): Int? {
         val numberPattern = Regex("""(?i)(?:d\s*[\+\-]?\s*)?(\d{1,4})""")
         val candidateNumbers = mutableListOf<Int>()
@@ -62,7 +62,6 @@ class CalendarSequenceValidator {
                 val numStr = match.groupValues[1]
                 val num = numStr.toIntOrNull()
                 if (num != null) {
-                    // Check if within tolerance
                     if (abs(num - expectedDday) <= tolerance) {
                         candidateNumbers.add(num)
                     }
@@ -70,34 +69,49 @@ class CalendarSequenceValidator {
             }
         }
 
-        // Return candidate closest to expectedDday
+        // expectedDday에 가장 가까운 후보 반환
         return candidateNumbers.minByOrNull { abs(it - expectedDday) }
     }
 
     /**
-     * Validates chronological sequence of daily calendar photo entries:
-     * 1. Detects unflipped calendars (consecutive entries on different calendar dates with identical D-day).
-     * 2. Detects missing days (gaps between resolved D-days).
+     * 일별 D-day 달력 사진 엔트리의 연속성을 검증:
+     * 1. OCR 노이즈 정제: ocrDday가 존재하나 exifDday와 편차가 3일 초과인 경우 잡숫자로 간주하여 EXIF 일수로 대체.
+     * 2. D-day 달력 미넘김 감지 (날짜가 바뀌었으나 동일 D-day 유지).
+     * 3. D-day 달력 결측일 감지 (resolvedDday 간 공백 탐색, todayMaxDday 상한선 및 큰 점프 방어).
+     *
+     * @param entries 검증할 달력 사진 엔트리 목록
+     * @param todayMaxDday 오늘 날짜 기준 D-day 상한선 (미래 일자 결측 방지용)
      */
-    fun validateSequence(entries: List<CalendarPhotoEntry>): SequenceValidationResult {
+    fun validateSequence(
+        entries: List<CalendarPhotoEntry>,
+        todayMaxDday: Int? = null
+    ): SequenceValidationResult {
         if (entries.isEmpty()) {
             return SequenceValidationResult(emptyList(), emptyList(), emptyList())
         }
 
-        // Sort chronologically by effective date and resolved D-day
-        val sortedEntries = entries.sortedWith(
+        // 1. OCR 노이즈 정제: ocrDday가 존재하나 exifDday와 편차가 3일 초과인 경우 잡숫자로 간주하여 EXIF 일수로 대체
+        val sanitizedEntries = entries.map { entry ->
+            if (entry.ocrDday != null && abs(entry.ocrDday - entry.exifDday) > 3) {
+                entry.copy(ocrDday = null, resolvedDday = entry.exifDday)
+            } else {
+                entry
+            }
+        }
+
+        // 날짜 및 resolvedDday 기준 오름차순 정렬
+        val sortedEntries = sanitizedEntries.sortedWith(
             compareBy<CalendarPhotoEntry> { it.effectiveDate }
                 .thenBy { it.resolvedDday }
         )
 
         val issues = mutableListOf<SequenceIssue>()
 
-        // 1. Unflipped calendar detection
+        // 2. D-day 달력 미넘김 감지
         for (i in 0 until sortedEntries.size - 1) {
             val current = sortedEntries[i]
             val next = sortedEntries[i + 1]
 
-            // If effective dates are different, but calendar D-day is the same:
             val currentCalendarDay = current.ocrDday ?: current.resolvedDday
             val nextCalendarDay = next.ocrDday ?: next.resolvedDday
 
@@ -106,14 +120,14 @@ class CalendarSequenceValidator {
                     SequenceIssue(
                         type = IssueType.UNFLIPPED_CALENDAR,
                         targetDday = nextCalendarDay,
-                        description = "미넘김 의심: ${current.effectiveDate}와 ${next.effectiveDate}의 달력 D-day가 모두 D+$nextCalendarDay 입니다.",
+                        description = "D-day 달력 미넘김 의심: ${current.effectiveDate}와 ${next.effectiveDate}의 D-day 달력이 모두 D+$nextCalendarDay 입니다.",
                         relatedEntryIds = listOf(current.id, next.id)
                     )
                 )
             }
         }
 
-        // 2. Missing days detection
+        // 3. D-day 달력 결측일 감지
         val uniqueDays = sortedEntries.map { it.resolvedDday }.distinct().sorted()
         val allMissingDays = mutableListOf<Int>()
 
@@ -123,16 +137,34 @@ class CalendarSequenceValidator {
                 val nextDay = uniqueDays[i + 1]
 
                 if (nextDay > currentDay + 1) {
-                    val missingRange = ((currentDay + 1) until nextDay).toList()
-                    allMissingDays.addAll(missingRange)
-                    issues.add(
-                        SequenceIssue(
-                            type = IssueType.MISSING_DAYS,
-                            targetDday = currentDay,
-                            description = "결측일 감지: D+$currentDay 에서 D+$nextDay 사이에 ${missingRange.joinToString { "D+$it" }} 누락",
-                            missingDays = missingRange
+                    val rawMissing = ((currentDay + 1) until nextDay).toList()
+
+                    // todayMaxDday 상한선 적용 (오늘 이후 미래 일자는 결측일에 포함하지 않음)
+                    val boundedMissing = if (todayMaxDday != null) {
+                        rawMissing.filter { it <= todayMaxDday }
+                    } else {
+                        rawMissing
+                    }
+
+                    // 비정상적으로 큰 점프(예: nextDay - currentDay >= 10) 방어:
+                    // todayMaxDday가 없으면 최대 9개로 제한
+                    val missingRange = if (todayMaxDday == null && (nextDay - currentDay >= 10)) {
+                        boundedMissing.take(9)
+                    } else {
+                        boundedMissing
+                    }
+
+                    if (missingRange.isNotEmpty()) {
+                        allMissingDays.addAll(missingRange)
+                        issues.add(
+                            SequenceIssue(
+                                type = IssueType.MISSING_DAYS,
+                                targetDday = currentDay,
+                                description = "D-day 달력 결측일 감지: D+$currentDay 에서 D+$nextDay 사이에 ${missingRange.joinToString { "D+$it" }} 누락",
+                                missingDays = missingRange
+                            )
                         )
-                    )
+                    }
                 }
             }
         }

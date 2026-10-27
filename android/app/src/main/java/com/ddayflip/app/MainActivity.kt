@@ -9,6 +9,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import com.ddayflip.app.core.domain.CalendarRoi
 import com.ddayflip.app.core.domain.DdayStartRule
 import com.ddayflip.app.core.domain.SequenceValidationResult
 import com.ddayflip.app.data.MediaStorePhotoRepository
@@ -48,6 +49,8 @@ class MainActivity : ComponentActivity() {
                     var scanStartDate by remember { mutableStateOf(LocalDate.now().minusDays(150)) }
                     var scanEndDate by remember { mutableStateOf(LocalDate.now()) }
                     var ddayRule by remember { mutableStateOf(DdayStartRule.ONE_BASED) }
+                    var calendarRoi by remember { mutableStateOf<CalendarRoi?>(null) }
+                    var todayMaxDday by remember { mutableIntStateOf(150) }
                     var validationResult by remember {
                         mutableStateOf<SequenceValidationResult?>(null)
                     }
@@ -57,11 +60,13 @@ class MainActivity : ComponentActivity() {
                     when (currentScreen) {
                         AppScreen.START -> {
                             StartScreen(
-                                onStartScan = { birthday, rule ->
+                                onStartScan = { birthday, rule, roi, maxDday ->
                                     ddayRule = rule
                                     scanStartDate = birthday
                                     // 1단계 목표: 생일 당일부터 약 150일간의 사진 스캔
                                     scanEndDate = birthday.plusDays(150)
+                                    calendarRoi = roi
+                                    todayMaxDday = maxDday
                                     currentScreen = AppScreen.SCAN
                                 }
                             )
@@ -72,6 +77,8 @@ class MainActivity : ComponentActivity() {
                                 endDate = scanEndDate,
                                 birthday = scanStartDate,
                                 ddayRule = ddayRule,
+                                calendarRoi = calendarRoi,
+                                todayMaxDday = todayMaxDday,
                                 photoRepository = photoRepository,
                                 onNavigateToReview = { result ->
                                     validationResult = result
