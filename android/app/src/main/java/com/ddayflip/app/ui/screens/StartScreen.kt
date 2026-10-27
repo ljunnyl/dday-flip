@@ -2,14 +2,18 @@ package com.ddayflip.app.ui.screens
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,17 +25,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.ddayflip.app.core.domain.CalendarRoi
+import com.ddayflip.app.core.domain.DdayCalculator
 import com.ddayflip.app.core.domain.DdayStartRule
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.LocalDateTime
 
 /**
- * 01. 시작 & 아기 생일 입력 화면
+ * 01. 시작 & 아기 생일 및 D-day 달력 기준 사진 입력 화면
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StartScreen(
-    onStartScan: (birthday: LocalDate, rule: DdayStartRule) -> Unit = { _, _ -> }
+    onStartScan: (
+        birthday: LocalDate,
+        rule: DdayStartRule,
+        calendarRoi: CalendarRoi?,
+        todayMaxDday: Int
+    ) -> Unit = { _, _, _, _ -> }
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -41,6 +53,21 @@ fun StartScreen(
     var birthdayMonth by remember { mutableStateOf("05") }
     var birthdayDay by remember { mutableStateOf("27") }
     var selectedRule by remember { mutableStateOf(DdayStartRule.ONE_BASED) }
+
+    var referencePhotoUri by remember { mutableStateOf<Uri?>(null) }
+    var selectedRoi by remember { mutableStateOf<CalendarRoi?>(null) }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        referencePhotoUri = uri
+        selectedRoi = if (uri != null) {
+            // 기준 사진 선택 시 상단 중앙 기본 D-day 달력 영역 설정
+            CalendarRoi(x = 0.15f, y = 0.05f, width = 0.70f, height = 0.35f)
+        } else {
+            null
+        }
+    }
 
     // 안드로이드 버전에 따른 권한 결정 (API 33+ READ_MEDIA_IMAGES, API 32 이하 READ_EXTERNAL_STORAGE)
     val requiredPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -54,7 +81,9 @@ fun StartScreen(
         val m = birthdayMonth.toIntOrNull() ?: 1
         val d = birthdayDay.toIntOrNull() ?: 1
         val birthday = LocalDate.of(y, m, d)
-        onStartScan(birthday, selectedRule)
+        val todayMaxDday = DdayCalculator(birthday, selectedRule)
+            .calculate(LocalDateTime.now()).dday
+        onStartScan(birthday, selectedRule, selectedRoi, todayMaxDday)
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -92,7 +121,7 @@ fun StartScreen(
         ) {
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(20.dp)
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 // Privacy Guarantee Badge (100% On-Device)
                 Card(
@@ -104,7 +133,7 @@ fun StartScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
+                            .padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
@@ -131,13 +160,13 @@ fun StartScreen(
 
                 Text(
                     text = "아기 생일을 알려주세요",
-                    fontSize = 22.sp,
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
                 )
 
                 Text(
-                    text = "촬영일시와 달력 숫자를 비교하여 누락되거나 미넘김된 날짜를 자동으로 감지합니다.",
-                    fontSize = 14.sp,
+                    text = "촬영일시와 D-day 달력 숫자를 비교하여 누락되거나 미넘김된 날짜를 자동으로 감지합니다.",
+                    fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
@@ -173,7 +202,7 @@ fun StartScreen(
                 Text(
                     text = "D-day 표기 규칙",
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp
+                    fontSize = 15.sp
                 )
 
                 Row(
@@ -193,6 +222,87 @@ fun StartScreen(
                         modifier = Modifier.weight(1f)
                     )
                 }
+
+                // 기준 D-day 달력 사진 1장 선택 (선택사항)
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "기준 D-day 달력 사진 1장 선택 (선택사항)",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp
+                            )
+                            if (referencePhotoUri != null) {
+                                TextButton(
+                                    onClick = {
+                                        referencePhotoUri = null
+                                        selectedRoi = null
+                                    },
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Text("선택 해제", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+                        Text(
+                            text = "D-day 달력이 잘 나온 사진 1장을 지정하면 위치를 자동 참조하여 인식 정확도가 대폭 향상됩니다.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (referencePhotoUri == null) {
+                            OutlinedButton(
+                                onClick = {
+                                    photoPickerLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("기준 사진 선택하기", fontSize = 13.sp)
+                            }
+                        } else {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = "기준 사진 선택됨: D-day 달력 위치 자동 설정됨",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // Start Scanning Button
@@ -207,12 +317,12 @@ fun StartScreen(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(56.dp),
+                    .height(54.dp),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 Icon(Icons.Default.CalendarMonth, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("갤러리 스캔 및 자동 분류 시작", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text("갤러리 스캔 및 D-day 달력 분류 시작", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
         }
     }

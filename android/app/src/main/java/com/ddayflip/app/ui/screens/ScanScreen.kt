@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ddayflip.app.core.domain.CalendarPhotoEntry
+import com.ddayflip.app.core.domain.CalendarRoi
 import com.ddayflip.app.core.domain.CalendarSequenceValidator
 import com.ddayflip.app.core.domain.DdayCalculator
 import com.ddayflip.app.core.domain.DdayStartRule
@@ -36,6 +37,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
+import kotlin.math.abs
 
 /**
  * 02. 온디바이스 OCR 스캔 및 실시간 진행 화면
@@ -47,6 +49,8 @@ fun ScanScreen(
     endDate: LocalDate = LocalDate.now(),
     birthday: LocalDate = startDate,
     ddayRule: DdayStartRule = DdayStartRule.ONE_BASED,
+    calendarRoi: CalendarRoi? = null,
+    todayMaxDday: Int? = null,
     photoRepository: PhotoRepository? = null,
     ddayScanner: DdayScanner? = null,
     onNavigateToReview: (SequenceValidationResult) -> Unit = {}
@@ -99,18 +103,24 @@ fun ScanScreen(
 
             currentStatusText = "사진 분석 중 (${index + 1}/${photos.size}): EXIF D+$expectedDday"
 
-            // 2. 비트맵 디코딩 및 온디바이스 OCR 스캔
+            // 2. 비트맵 디코딩 및 온디바이스 OCR 스캔 (ROI 전달)
             val bitmap = withContext(Dispatchers.IO) {
                 loadScaledBitmap(context, photo.contentUri)
             }
 
             var detectedDday: Int? = null
             if (bitmap != null) {
-                val ocrResult = scanner.scanDday(bitmap, expectedDay = expectedDday)
+                val ocrResult = scanner.scanDday(bitmap, expectedDay = expectedDday, roi = calendarRoi)
                 if (ocrResult != null) {
-                    detectedDday = ocrResult.dday
-                    detectedCalendarPhotos++
-                    currentStatusText = "현재 사진: D+$detectedDday 감지됨 (신뢰도 ${(ocrResult.confidence * 100).toInt()}%)"
+                    val rawDday = ocrResult.dday
+                    // OCR 노이즈 가드: ±3일 초과 편차 시 잡숫자로 간주하여 fallback
+                    if (abs(rawDday - expectedDday) <= 3) {
+                        detectedDday = rawDday
+                        detectedCalendarPhotos++
+                        currentStatusText = "현재 사진: D+$detectedDday 감지됨 (신뢰도 ${(ocrResult.confidence * 100).toInt()}%)"
+                    } else {
+                        currentStatusText = "현재 사진: OCR 숫자(D+$rawDday) 노이즈 감지 -> EXIF D+$expectedDday 로 대체"
+                    }
                 }
                 bitmap.recycle()
             }
@@ -127,10 +137,10 @@ fun ScanScreen(
             )
         }
 
-        // 3. 전체 시퀀스 스마트 검증 (결측일, 미넘김 의심 등)
+        // 3. 전체 시퀀스 스마트 검증 (결측일, 미넘김 의심 등, 오늘 상한선 적용)
         val validator = CalendarSequenceValidator()
-        validationResult = validator.validateSequence(entries)
-        currentStatusText = "분석 완료: 총 ${photos.size}장 중 ${detectedCalendarPhotos}장 D-day 인식"
+        validationResult = validator.validateSequence(entries, todayMaxDday = todayMaxDday)
+        currentStatusText = "분석 완료: 총 ${photos.size}장 중 ${detectedCalendarPhotos}장 D-day 달력 인식"
         isScanning = false
     }
 
@@ -245,12 +255,12 @@ fun ScanScreen(
                         )
                         StepItem(
                             stepNumber = "2",
-                            title = "온디바이스 OCR 달력 인식 ($detectedCalendarPhotos 장 감지)",
+                            title = "온디바이스 OCR D-day 달력 인식 ($detectedCalendarPhotos 장 감지)",
                             isDone = detectedCalendarPhotos > 0 || (isComplete && totalPhotos > 0)
                         )
                         StepItem(
                             stepNumber = "3",
-                            title = "연속성 검증 (미넘김/누락일 감지: ${validationResult.issues.size}건)",
+                            title = "연속성 검증 (D-day 달력 미넘김/누락일 감지: ${validationResult.issues.size}건)",
                             isDone = isComplete && totalPhotos > 0
                         )
                     }
