@@ -1,15 +1,12 @@
 package com.ddayflip.app.ui.screens
 
-import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.net.Uri
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.*
@@ -21,26 +18,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.ddayflip.app.core.domain.CalendarPhotoEntry
 import com.ddayflip.app.core.domain.CalendarRoi
-import com.ddayflip.app.core.domain.CalendarSequenceValidator
-import com.ddayflip.app.core.domain.DdayCalculator
 import com.ddayflip.app.core.domain.DdayStartRule
 import com.ddayflip.app.core.domain.SequenceValidationResult
-import com.ddayflip.app.data.MediaStorePhotoRepository
 import com.ddayflip.app.domain.ocr.DdayScanner
-import com.ddayflip.app.domain.ocr.MlKitDdayScanner
 import com.ddayflip.app.domain.repository.PhotoRepository
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.time.Instant
+import com.ddayflip.app.service.PhotoScanForegroundService
+import com.ddayflip.app.service.ScanServiceState
 import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.ZoneId
-import kotlin.math.abs
 
 /**
- * 02. 온디바이스 OCR 스캔 및 실시간 진행 화면
+ * 02. 온디바이스 OCR 백그라운드 포그라운드 서비스 연동 스캔 및 실시간 진행 화면
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,111 +41,108 @@ fun ScanScreen(
     todayMaxDday: Int? = null,
     photoRepository: PhotoRepository? = null,
     ddayScanner: DdayScanner? = null,
+    onCancelScan: () -> Unit = {},
     onNavigateToReview: (SequenceValidationResult) -> Unit = {}
 ) {
     val context = LocalContext.current
-    val repository = photoRepository ?: remember { MediaStorePhotoRepository(context) }
-    val scanner = ddayScanner ?: remember { MlKitDdayScanner() }
-    val ddayCalculator = remember(birthday, ddayRule) {
-        DdayCalculator(birthday = birthday, rule = ddayRule)
-    }
+    val scanState by PhotoScanForegroundService.scanState.collectAsState()
 
-    var totalPhotos by remember { mutableIntStateOf(0) }
-    var processedPhotos by remember { mutableIntStateOf(0) }
-    var detectedCalendarPhotos by remember { mutableIntStateOf(0) }
-    var currentStatusText by remember { mutableStateOf("스캔 준비 중...") }
-    var isScanning by remember { mutableStateOf(true) }
-    var validationResult by remember {
-        mutableStateOf(SequenceValidationResult(emptyList(), emptyList(), emptyList()))
-    }
-
-    LaunchedEffect(startDate, endDate) {
-        isScanning = true
-        processedPhotos = 0
-        detectedCalendarPhotos = 0
-        currentStatusText = "갤러리 사진 목록을 불러오는 중..."
-
-        val photos = withContext(Dispatchers.IO) {
-            repository.getPhotosBetween(startDate, endDate)
-        }
-        totalPhotos = photos.size
-
-        if (photos.isEmpty()) {
-            currentStatusText = "해당 기간에 촬영된 사진이 없습니다."
-            isScanning = false
-            return@LaunchedEffect
-        }
-
-        val entries = mutableListOf<CalendarPhotoEntry>()
-
-        for ((index, photo) in photos.withIndex()) {
-            processedPhotos = index + 1
-
-            // 1. 촬영 시간 기반 EXIF D-day 계산 (00~04시 심야 보정 포함)
-            val photoDateTime = LocalDateTime.ofInstant(
-                Instant.ofEpochMilli(photo.dateTakenMs),
-                ZoneId.systemDefault()
+    // 화면 진입 시 서비스가 유휴 상태(Idle)이면 포그라운드 서비스 시작
+    LaunchedEffect(Unit) {
+        if (PhotoScanForegroundService.scanState.value is ScanServiceState.Idle) {
+            PhotoScanForegroundService.startService(
+                context = context,
+                startDate = startDate,
+                endDate = endDate,
+                birthday = birthday,
+                ddayRule = ddayRule,
+                calendarRoi = calendarRoi,
+                todayMaxDday = todayMaxDday
             )
-            val calcResult = ddayCalculator.calculate(photoDateTime)
-            val expectedDday = calcResult.dday
+        }
+    }
 
-            currentStatusText = "사진 분석 중 (${index + 1}/${photos.size}): EXIF D+$expectedDday"
+    // 서비스 상태 변경 감지
+    LaunchedEffect(scanState) {
+        if (scanState is ScanServiceState.Completed) {
+            onNavigateToReview((scanState as ScanServiceState.Completed).result)
+        }
+    }
 
-            // 2. 비트맵 디코딩 및 온디바이스 OCR 스캔 (ROI 전달)
-            val bitmap = withContext(Dispatchers.IO) {
-                loadScaledBitmap(context, photo.contentUri)
-            }
-
-            var detectedDday: Int? = null
-            if (bitmap != null) {
-                val ocrResult = scanner.scanDday(bitmap, expectedDay = expectedDday, roi = calendarRoi)
-                if (ocrResult != null) {
-                    val rawDday = ocrResult.dday
-                    // OCR 노이즈 가드: ±3일 초과 편차 시 잡숫자로 간주하여 fallback
-                    if (abs(rawDday - expectedDday) <= 3) {
-                        detectedDday = rawDday
-                        detectedCalendarPhotos++
-                        currentStatusText = "현재 사진: D+$detectedDday 감지됨 (신뢰도 ${(ocrResult.confidence * 100).toInt()}%)"
-                    } else {
-                        currentStatusText = "현재 사진: OCR 숫자(D+$rawDday) 노이즈 감지 -> EXIF D+$expectedDday 로 대체"
-                    }
-                }
-                bitmap.recycle()
-            }
-
-            entries.add(
-                CalendarPhotoEntry(
-                    id = photo.id.toString(),
-                    effectiveDate = calcResult.effectiveDate,
-                    exifDday = expectedDday,
-                    ocrDday = detectedDday,
-                    resolvedDday = detectedDday ?: expectedDday,
-                    photoUri = photo.contentUri.toString()
+    val (processedPhotos, totalPhotos, detectedCount, currentStatusText, isComplete, isError, errorMessage) =
+        when (val state = scanState) {
+            is ScanServiceState.Idle -> {
+                StateDisplay(
+                    processed = 0,
+                    total = 0,
+                    detected = 0,
+                    statusText = "스캔 준비 중...",
+                    isComplete = false,
+                    isError = false,
+                    errorMessage = null
                 )
-            )
+            }
+            is ScanServiceState.Scanning -> {
+                StateDisplay(
+                    processed = state.processed,
+                    total = state.total,
+                    detected = state.detectedCount,
+                    statusText = state.currentStatusText,
+                    isComplete = false,
+                    isError = false,
+                    errorMessage = null
+                )
+            }
+            is ScanServiceState.Completed -> {
+                val entries = state.result.validatedEntries
+                StateDisplay(
+                    processed = entries.size,
+                    total = entries.size,
+                    detected = entries.count { it.ocrDday != null },
+                    statusText = "분석 완료: 총 ${entries.size}장 분석 완료",
+                    isComplete = true,
+                    isError = false,
+                    errorMessage = null
+                )
+            }
+            is ScanServiceState.Error -> {
+                StateDisplay(
+                    processed = 0,
+                    total = 0,
+                    detected = 0,
+                    statusText = "오류 발생",
+                    isComplete = false,
+                    isError = true,
+                    errorMessage = state.message
+                )
+            }
         }
-
-        // 3. 전체 시퀀스 스마트 검증 (결측일, 미넘김 의심 등, 오늘 상한선 적용)
-        val validator = CalendarSequenceValidator()
-        validationResult = validator.validateSequence(entries, todayMaxDday = todayMaxDday)
-        currentStatusText = "분석 완료: 총 ${photos.size}장 중 ${detectedCalendarPhotos}장 D-day 달력 인식"
-        isScanning = false
-    }
 
     val progress = if (totalPhotos > 0) {
         processedPhotos.toFloat() / totalPhotos.toFloat()
-    } else if (!isScanning) {
+    } else if (isComplete) {
         1f
     } else {
         0f
     }
     val animatedProgress by animateFloatAsState(targetValue = progress, label = "scan_progress")
-    val isComplete = !isScanning && (processedPhotos >= totalPhotos)
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("온디바이스 사진 분석", fontWeight = FontWeight.Bold) }
+                title = { Text("온디바이스 사진 분석", fontWeight = FontWeight.Bold) },
+                actions = {
+                    if (scanState is ScanServiceState.Scanning) {
+                        TextButton(
+                            onClick = {
+                                PhotoScanForegroundService.cancelScan(context)
+                                onCancelScan()
+                            }
+                        ) {
+                            Text("취소", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
             )
         }
     ) { padding ->
@@ -177,27 +162,38 @@ fun ScanScreen(
                 Spacer(modifier = Modifier.height(20.dp))
 
                 // Status Icon
-                if (isComplete) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = "Analysis Complete",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(72.dp)
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Default.HourglassTop,
-                        contentDescription = "Analyzing",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(72.dp)
-                    )
+                when {
+                    isError -> {
+                        Icon(
+                            imageVector = Icons.Default.ErrorOutline,
+                            contentDescription = "Analysis Error",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(72.dp)
+                        )
+                    }
+                    isComplete -> {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Analysis Complete",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(72.dp)
+                        )
+                    }
+                    else -> {
+                        Icon(
+                            imageVector = Icons.Default.HourglassTop,
+                            contentDescription = "Analyzing",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(72.dp)
+                        )
+                    }
                 }
 
                 Text(
-                    text = if (isComplete) {
-                        if (totalPhotos == 0) "해당 기간에 촬영된 사진이 없습니다" else "스캔 및 분석 완료!"
-                    } else {
-                        "갤러리 사진을 분석하는 중..."
+                    text = when {
+                        isError -> "분석 중 문제가 발생했습니다"
+                        isComplete -> if (totalPhotos == 0) "해당 기간에 촬영된 사진이 없습니다" else "스캔 및 분석 완료!"
+                        else -> "갤러리 사진을 분석하는 중..."
                     },
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
@@ -205,9 +201,9 @@ fun ScanScreen(
 
                 // Current Live Status Text
                 Text(
-                    text = currentStatusText,
+                    text = if (isError) (errorMessage ?: "오류 발생") else currentStatusText,
                     fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 // Progress Bar
@@ -255,12 +251,12 @@ fun ScanScreen(
                         )
                         StepItem(
                             stepNumber = "2",
-                            title = "온디바이스 OCR D-day 달력 인식 ($detectedCalendarPhotos 장 감지)",
-                            isDone = detectedCalendarPhotos > 0 || (isComplete && totalPhotos > 0)
+                            title = "온디바이스 OCR D-day 달력 인식 ($detectedCount 장 감지)",
+                            isDone = detectedCount > 0 || (isComplete && totalPhotos > 0)
                         )
                         StepItem(
                             stepNumber = "3",
-                            title = "연속성 검증 (D-day 달력 미넘김/누락일 감지: ${validationResult.issues.size}건)",
+                            title = "백그라운드 포그라운드 서비스 및 연속성 검증",
                             isDone = isComplete && totalPhotos > 0
                         )
                     }
@@ -290,19 +286,56 @@ fun ScanScreen(
             }
 
             // Bottom Action Button
-            Button(
-                onClick = { onNavigateToReview(validationResult) },
-                enabled = isComplete && totalPhotos > 0,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text("스마트 검수 및 타임라인 확인", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            if (isError) {
+                Button(
+                    onClick = {
+                        PhotoScanForegroundService.startService(
+                            context = context,
+                            startDate = startDate,
+                            endDate = endDate,
+                            birthday = birthday,
+                            ddayRule = ddayRule,
+                            calendarRoi = calendarRoi,
+                            todayMaxDday = todayMaxDday
+                        )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("다시 시도", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            } else {
+                Button(
+                    onClick = {
+                        val state = scanState
+                        if (state is ScanServiceState.Completed) {
+                            onNavigateToReview(state.result)
+                        }
+                    },
+                    enabled = isComplete && totalPhotos > 0,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("스마트 검수 및 타임라인 확인", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
     }
 }
+
+private data class StateDisplay(
+    val processed: Int,
+    val total: Int,
+    val detected: Int,
+    val statusText: String,
+    val isComplete: Boolean,
+    val isError: Boolean,
+    val errorMessage: String?
+)
 
 @Composable
 private fun StepItem(stepNumber: String, title: String, isDone: Boolean) {
@@ -321,32 +354,5 @@ private fun StepItem(stepNumber: String, title: String, isDone: Boolean) {
             fontWeight = if (isDone) FontWeight.SemiBold else FontWeight.Normal,
             color = if (isDone) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
         )
-    }
-}
-
-/**
- * 메모리 절약을 위한 스케일 다운 비트맵 디코딩 헬퍼
- */
-private fun loadScaledBitmap(context: Context, uri: Uri, targetMaxDim: Int = 1200): Bitmap? {
-    return try {
-        context.contentResolver.openInputStream(uri)?.use { stream ->
-            val options = BitmapFactory.Options().apply {
-                inJustDecodeBounds = true
-            }
-            BitmapFactory.decodeStream(stream, null, options)
-            val maxDim = maxOf(options.outWidth, options.outHeight)
-            var sampleSize = 1
-            while (maxDim / (sampleSize * 2) >= targetMaxDim) {
-                sampleSize *= 2
-            }
-            val decodeOptions = BitmapFactory.Options().apply {
-                inSampleSize = sampleSize
-            }
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                BitmapFactory.decodeStream(inputStream, null, decodeOptions)
-            }
-        }
-    } catch (e: Exception) {
-        null
     }
 }
