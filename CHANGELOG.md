@@ -5,6 +5,15 @@
 ## [Unreleased]
 
 ### Added
+- 백그라운드 사진 분석 포그라운드 서비스(`PhotoScanForegroundService`) 및 실시간 상태 모델(`ScanServiceState`) 구현
+  - `AndroidManifest.xml`: `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC`, `POST_NOTIFICATIONS` 권한 및 `PhotoScanForegroundService` 선언
+  - `PhotoScanState.kt`: `ScanServiceState` (Idle, Scanning, Completed, Error) 상태 정의 및 진행률 percentage 계산
+  - `PhotoScanForegroundService`: AndroidX NotificationCompat 기반 실시간 프로그레스 알림(ID 1001), 완료 알림(ID 1002) 연결 및 Coroutine 기반 백그라운드 OCR/EXIF 분석 및 취소/예외 처리
+  - `ScanScreen.kt` & `MainActivity.kt`: 포그라운드 서비스 StateFlow 관찰 및 Reconnection, 백그라운드 전환 후 복귀 시 진행 상태 즉시 복원, Android 13+ 알림 런타임 권한 요청
+  - `PhotoScanStateTest`: 상태 모델 전이, percentage 비율 계산, resetState 동작 TDD 단위 테스트 통과
+  > 💡 **의도:** 대용량 사진 분석 중 사용자가 홈 화면으로 나가거나 다른 앱을 사용하더라도 OS의 백그라운드 프로세스 종료(Kill) 위험 없이 끊김 없이 온디바이스 OCR 분석을 완료하고, 진행 상태를 실시간 알림창으로 확인 및 언제든 복귀할 수 있도록 지원.
+
+### Added
 - D-day ?? ?? ??(ROI) ? ??? ???(todayMaxDday) ??
   - `CalendarRoi`: ???? ??(0.0~1.0) ?? ?? ??? ?? ?? ? `withMargin(0.15f)` ?? ?? ?? ??
   - `CalendarSequenceValidator`:
