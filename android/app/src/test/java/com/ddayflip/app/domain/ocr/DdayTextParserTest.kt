@@ -93,4 +93,21 @@ class DdayTextParserTest {
         assertNull(parser.parse("Hello World Only Text"))
         assertNull(parser.parse("1920x1080 4032x3024"))
     }
+
+    @Test
+    fun parse_spacedKoreanWoodBlocks_returns155() {
+        val text = "❤️ 1 5 5 일"
+        val r = parser.parse(text)
+        assertNotNull(r)
+        assertEquals(155, r?.dday)
+        assertTrue((r?.confidence ?: 0f) >= 0.95f)
+    }
+
+    @Test
+    fun parse_spacedKoreanWoodBlocksList_returns155() {
+        val blocks = listOf("❤️", "1", "5", "5", "일")
+        val r = parser.parse(blocks)
+        assertNotNull(r)
+        assertEquals(155, r?.dday)
+    }
 }

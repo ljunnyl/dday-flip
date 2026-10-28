@@ -175,4 +175,16 @@ class CalendarSequenceValidator {
             missingDays = allMissingDays
         )
     }
+
+    /**
+     * 동일 날짜(D-day)에 여러 장의 사진이 있는 경우,
+     * 선명도(sharpnessScore)가 가장 높은 1장만 기본 선별하여 중복 투입을 방지.
+     */
+    fun selectBestPhotoPerDay(entries: List<CalendarPhotoEntry>): List<CalendarPhotoEntry> {
+        return entries.groupBy { it.resolvedDday }
+            .map { (_, photosOfDay) ->
+                photosOfDay.maxByOrNull { it.sharpnessScore } ?: photosOfDay.first()
+            }
+            .sortedBy { it.resolvedDday }
+    }
 }

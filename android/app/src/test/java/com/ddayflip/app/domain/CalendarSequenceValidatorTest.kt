@@ -129,4 +129,48 @@ class CalendarSequenceValidatorTest {
         assertNotNull(filtered)
         assertEquals(13, filtered)
     }
+
+    @Test
+    fun `test selectBestPhotoPerDay picks highest sharpness per day and deduplicates`() {
+        val entries = listOf(
+            CalendarPhotoEntry(
+                id = "p1_blurry",
+                effectiveDate = LocalDate.of(2024, 6, 1),
+                exifDday = 10,
+                resolvedDday = 10,
+                sharpnessScore = 50.0
+            ),
+            CalendarPhotoEntry(
+                id = "p1_sharp",
+                effectiveDate = LocalDate.of(2024, 6, 1),
+                exifDday = 10,
+                resolvedDday = 10,
+                sharpnessScore = 185.0
+            ),
+            CalendarPhotoEntry(
+                id = "p1_mid",
+                effectiveDate = LocalDate.of(2024, 6, 1),
+                exifDday = 10,
+                resolvedDday = 10,
+                sharpnessScore = 90.0
+            ),
+            CalendarPhotoEntry(
+                id = "p2_single",
+                effectiveDate = LocalDate.of(2024, 6, 2),
+                exifDday = 11,
+                resolvedDday = 11,
+                sharpnessScore = 110.0
+            )
+        )
+
+        val selected = validator.selectBestPhotoPerDay(entries)
+
+        assertEquals(2, selected.size)
+        assertEquals("p1_sharp", selected[0].id)
+        assertEquals(10, selected[0].resolvedDday)
+        assertEquals(185.0, selected[0].sharpnessScore, 0.01)
+
+        assertEquals("p2_single", selected[1].id)
+        assertEquals(11, selected[1].resolvedDday)
+    }
 }

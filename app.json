@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "디데이 넘김",
+    "slug": "dday-flip",
+    "version": "2.1.0",
+    "orientation": "portrait",
+    "android": {
+      "package": "com.ddayflip.app"
+    },
+    "owner": "junsik9474",
+    "extra": {
+      "eas": {
+        "projectId": "51da3c04-02be-41bb-9522-f90aacc41b9c"
+      }
+    }
+  }
+}

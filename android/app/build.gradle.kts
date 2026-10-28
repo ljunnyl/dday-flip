@@ -66,7 +66,8 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
 
     // Google ML Kit Text Recognition (On-device)
-    implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.mlkit:text-recognition-korean:16.0.1")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
 
     // Media3 (Transformer, ExoPlayer, UI)
     implementation("androidx.media3:media3-transformer:1.4.1")

@@ -1,11 +1,12 @@
 package com.ddayflip.app.domain.ocr
 
 import android.graphics.Bitmap
+import android.util.Log
 import com.ddayflip.app.core.domain.CalendarRoi
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -28,13 +29,17 @@ interface DdayScanner : Closeable {
 }
 
 /**
- * Google ML Kit 기반 온디바이스 D-day 텍스트 인식 엔진.
- * 네트워크 통신 없이 로컬 프로세서로만 동작하며 ROI 우선 및 상단 35% 타일링 크롭 우선 인식 전략을 적용.
+ * Google ML Kit 기반 온디바이스 D-day 텍스트 인식 엔진 (한글 + 영문/숫자).
+ * 네트워크 통신 없이 로컬 프로세서로만 동작하며 ROI 우선 및 전체 스캔 fallback 적용.
  */
 class MlKitDdayScanner(
     private val parser: DdayTextParser = DdayTextParser(),
-    private val recognizer: TextRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    private val recognizer: TextRecognizer = TextRecognition.getClient(
+        KoreanTextRecognizerOptions.Builder().build()
+    )
 ) : DdayScanner {
+
+    private val TAG = "DdayScanner"
 
     override suspend fun scanDday(
         bitmap: Bitmap,
@@ -43,9 +48,9 @@ class MlKitDdayScanner(
     ): DdayParseResult? = withContext(Dispatchers.Default) {
         if (bitmap.width <= 0 || bitmap.height <= 0) return@withContext null
 
-        // 1. ROI 지정 영역 크롭 우선 인식 (마진 15% 확장)
+        // 1. ROI 지정 영역 크롭 우선 인식 (마진 25% 확장)
         if (roi != null) {
-            val marginRoi = roi.withMargin(0.15f)
+            val marginRoi = roi.withMargin(0.25f)
             val cropX = (bitmap.width * marginRoi.x).toInt().coerceIn(0, bitmap.width - 1)
             val cropY = (bitmap.height * marginRoi.y).toInt().coerceIn(0, bitmap.height - 1)
             val cropW = (bitmap.width * marginRoi.width).toInt().coerceIn(1, bitmap.width - cropX)
@@ -55,12 +60,14 @@ class MlKitDdayScanner(
             try {
                 roiCroppedBitmap = Bitmap.createBitmap(bitmap, cropX, cropY, cropW, cropH)
                 val roiBlocks = runOcr(roiCroppedBitmap)
+                Log.d(TAG, "ROI OCR detected blocks: $roiBlocks")
                 val roiResult = parser.parse(roiBlocks, expectedDay)
-                if (roiResult != null && roiResult.confidence >= 0.85f) {
+                if (roiResult != null) {
+                    Log.d(TAG, "ROI OCR Matched D-day: ${roiResult.dday} (conf: ${roiResult.confidence})")
                     return@withContext roiResult
                 }
             } catch (e: Exception) {
-                // ROI 크롭/인식 오류 시 다음 전략으로 fallback
+                Log.e(TAG, "ROI crop error: ${e.message}")
             } finally {
                 if (roiCroppedBitmap != null && roiCroppedBitmap != bitmap && !roiCroppedBitmap.isRecycled) {
                     roiCroppedBitmap.recycle()
@@ -68,52 +75,36 @@ class MlKitDdayScanner(
             }
         }
 
-        // 2. 기본 타일링 전략: 상단 35% 영역(아기 달력 거치 위치) 크롭 인식
-        val topCropHeight = (bitmap.height * 0.35f).toInt().coerceAtLeast(1)
-        var topCroppedBitmap: Bitmap? = null
-        try {
-            topCroppedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, topCropHeight)
-            val topBlocks = runOcr(topCroppedBitmap)
-            val topResult = parser.parse(topBlocks, expectedDay)
-
-            // 신뢰도가 높은 결과(0.85 이상)가 나오면 전체 스캔 생략하고 즉시 반환
-            if (topResult != null && topResult.confidence >= 0.85f) {
-                return@withContext topResult
-            }
-        } catch (e: Exception) {
-            // 상단 크롭/인식 오류 시 전체 비트맵 인식으로 fallback
-        } finally {
-            if (topCroppedBitmap != null && topCroppedBitmap != bitmap && !topCroppedBitmap.isRecycled) {
-                topCroppedBitmap.recycle()
-            }
-        }
-
-        // 3. 상단에서 발견하지 못했거나 신뢰도가 낮으면 전체 비트맵 인식 수행
+        // 2. 전체 비트맵 인식 수행
         try {
             val fullBlocks = runOcr(bitmap)
-            return@withContext parser.parse(fullBlocks, expectedDay)
+            Log.d(TAG, "Full OCR detected blocks (${fullBlocks.size}): $fullBlocks")
+            val fullResult = parser.parse(fullBlocks, expectedDay)
+            if (fullResult != null) {
+                Log.d(TAG, "Full OCR Matched D-day: ${fullResult.dday} (conf: ${fullResult.confidence})")
+                return@withContext fullResult
+            }
         } catch (e: Exception) {
-            return@withContext null
+            Log.e(TAG, "Full OCR scan error: ${e.message}")
         }
+
+        return@withContext null
     }
 
     /**
-     * ML Kit 비동기 텍스트 인식을 코루틴 suspend 함수로 변환
+     * ML Kit 비동기 텍스트 인식 실행
      */
     private suspend fun runOcr(bitmap: Bitmap): List<String> =
         suspendCancellableCoroutine { continuation ->
-            val image = InputImage.fromBitmap(bitmap, 0)
-            recognizer.process(image)
+            val inputImage = InputImage.fromBitmap(bitmap, 0)
+            recognizer.process(inputImage)
                 .addOnSuccessListener { visionText ->
-                    if (continuation.isActive) {
-                        val blocks = visionText.textBlocks.map { it.text }
-                        continuation.resume(blocks)
-                    }
+                    val textBlocks = visionText.textBlocks.map { it.text }
+                    continuation.resume(textBlocks)
                 }
                 .addOnFailureListener { exception ->
-                    if (continuation.isActive) {
-                        continuation.resumeWithException(exception)
-                    }
+                    Log.e(TAG, "ML Kit Recognizer failure: ${exception.message}", exception)
+                    continuation.resumeWithException(exception)
                 }
         }
 

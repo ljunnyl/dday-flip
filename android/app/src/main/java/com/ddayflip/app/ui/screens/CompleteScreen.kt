@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
@@ -35,7 +36,7 @@ import com.ddayflip.app.domain.video.VideoExporter
 import java.io.File
 
 /**
- * 04. 완성된 영상 재생 및 저장 화면
+ * R06. 완성된 영상 재생 및 저장 & 공유 화면
  */
 @OptIn(UnstableApi::class)
 @ExperimentalMaterial3Api
@@ -46,7 +47,8 @@ fun CompleteScreen(
     totalFrames: Int = 120,
     videoResolution: String = "1080x1920 (9:16 FHD)",
     videoExporter: VideoExporter = MediaCodecVideoExporter(),
-    onRestart: () -> Unit = {}
+    onRestart: () -> Unit = {},
+    onReedit: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var isSavedToGallery by remember { mutableStateOf(false) }
@@ -73,7 +75,7 @@ fun CompleteScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("영상 완성", fontWeight = FontWeight.Bold) }
+                title = { Text("영상 완성 ✨", fontWeight = FontWeight.Bold) }
             )
         }
     ) { padding ->
@@ -91,7 +93,7 @@ fun CompleteScreen(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    text = "D-day 플립 성장 영상이 완성되었습니다!",
+                    text = "우리 아기 D-day 릴스가 완성되었어요! 🎉",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -101,8 +103,8 @@ fun CompleteScreen(
                     modifier = Modifier
                         .fillMaxWidth(0.7f)
                         .aspectRatio(9f / 16f)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color.Black),
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color(0xFF1F2421)),
                     contentAlignment = Alignment.Center
                 ) {
                     if (videoFile != null && videoFile.exists()) {
@@ -141,7 +143,7 @@ fun CompleteScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(16.dp)
                 ) {
                     Row(
                         modifier = Modifier
@@ -170,7 +172,42 @@ fun CompleteScreen(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                // 공유 버튼 (Primary)
                 Button(
+                    onClick = {
+                        if (videoFile != null && videoFile.exists()) {
+                            try {
+                                val contentUri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    videoFile
+                                )
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "video/mp4"
+                                    putExtra(Intent.EXTRA_STREAM, contentUri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(Intent.createChooser(shareIntent, "우리 아기 디데이 릴스 공유하기"))
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "영상 공유 실패: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        } else {
+                            Toast.makeText(context, "공유할 비디오 파일이 없습니다.", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Icon(Icons.Default.Share, contentDescription = null, tint = Color.White)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("인스타그램 릴스 공유 / 가족에게 보내기 🚀", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
+
+                // 갤러리 저장 버튼
+                OutlinedButton(
                     onClick = {
                         if (videoFile != null && videoFile.exists()) {
                             val savedUri = videoExporter.saveVideoToGallery(context, videoFile)
@@ -190,57 +227,37 @@ fun CompleteScreen(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp),
-                    shape = RoundedCornerShape(12.dp)
+                        .height(50.dp),
+                    shape = RoundedCornerShape(14.dp)
                 ) {
                     Icon(Icons.Default.FileDownload, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (isSavedToGallery) "갤러리 저장 완료" else "갤러리에 저장",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
+                        text = if (isSavedToGallery) "✓ 갤러리 저장 완료" else "내 폰 갤러리에 저장하기 ✨",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
                 }
 
-                OutlinedButton(
-                    onClick = {
-                        if (videoFile != null && videoFile.exists()) {
-                            try {
-                                val contentUri = FileProvider.getUriForFile(
-                                    context,
-                                    "${context.packageName}.fileprovider",
-                                    videoFile
-                                )
-                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "video/mp4"
-                                    putExtra(Intent.EXTRA_STREAM, contentUri)
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                }
-                                context.startActivity(Intent.createChooser(shareIntent, "D-day 플립 영상 공유"))
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "영상 공유 실패: ${e.message}", Toast.LENGTH_SHORT).show()
-                            }
-                        } else {
-                            Toast.makeText(context, "공유할 비디오 파일이 없습니다.", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp),
-                    shape = RoundedCornerShape(12.dp)
+                // 편집 및 홈 버튼 행
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(Icons.Default.Share, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("영상 공유하기", fontSize = 15.sp)
-                }
-
-                TextButton(
-                    onClick = onRestart,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("새로운 영상 만들기")
+                    TextButton(
+                        onClick = onReedit,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("사진 다시 수정하기", fontSize = 13.sp)
+                    }
+                    TextButton(
+                        onClick = onRestart,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Home, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("홈으로 돌아가기", fontSize = 13.sp)
+                    }
                 }
             }
         }

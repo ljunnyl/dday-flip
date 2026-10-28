@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
+import android.util.Log
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
@@ -164,6 +165,7 @@ class PhotoScanForegroundService : Service() {
             val photos = withContext(Dispatchers.IO) {
                 repository.getPhotosBetween(startDate, endDate)
             }
+            Log.d("DdayScanner", "MediaStore queried between $startDate and $endDate: found ${photos.size} photos")
             val total = photos.size
 
             if (total == 0) {
@@ -195,7 +197,7 @@ class PhotoScanForegroundService : Service() {
 
                 // 2. 비트맵 디코딩 및 온디바이스 OCR 스캔 (ROI 전달)
                 val bitmap = withContext(Dispatchers.IO) {
-                    loadScaledBitmap(applicationContext, photo.contentUri)
+                    com.ddayflip.app.util.BitmapUtils.loadOrientedBitmap(applicationContext, photo.contentUri, 1200)
                 }
 
                 var detectedDday: Int? = null
@@ -203,14 +205,18 @@ class PhotoScanForegroundService : Service() {
                     val ocrResult = scanner.scanDday(bitmap, expectedDay = expectedDday, roi = calendarRoi)
                     if (ocrResult != null) {
                         val rawDday = ocrResult.dday
-                        // OCR 노이즈 가드: ±3일 초과 편차 시 잡숫자로 간주하여 fallback
-                        if (abs(rawDday - expectedDday) <= 3) {
+                        Log.d("DdayScanner", "Photo #${photo.id}: OCR found D+$rawDday (expected: $expectedDday, conf: ${ocrResult.confidence})")
+                        // 유효 D-day 인정: 예상일 기준 ±5일 이내이거나, 합리적 아기 디데이 범위(1~500일)인 경우 인정
+                        if (abs(rawDday - expectedDday) <= 5 || rawDday in 1..500) {
                             detectedDday = rawDday
                             detectedCalendarPhotos++
-                            currentStatus = "현재 사진: D+$detectedDday 감지됨 (신뢰도 ${(ocrResult.confidence * 100).toInt()}%)"
+                            currentStatus = "D+$detectedDday 감지됨 ✨ (신뢰도 ${(ocrResult.confidence * 100).toInt()}%)"
                         } else {
-                            currentStatus = "현재 사진: OCR 숫자(D+$rawDday) 노이즈 감지 -> EXIF D+$expectedDday 로 대체"
+                            Log.w("DdayScanner", "Photo #${photo.id}: D+$rawDday rejected as noise (expected $expectedDday)")
+                            currentStatus = "D+$expectedDday 추정 (OCR 노이즈 대체)"
                         }
+                    } else {
+                        Log.d("DdayScanner", "Photo #${photo.id}: No D-day text detected in photo")
                     }
                     bitmap.recycle()
                 }

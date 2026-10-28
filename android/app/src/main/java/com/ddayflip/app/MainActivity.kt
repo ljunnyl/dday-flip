@@ -15,6 +15,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import com.ddayflip.app.core.domain.CalendarPhotoEntry
 import com.ddayflip.app.core.domain.CalendarRoi
 import com.ddayflip.app.core.domain.DdayStartRule
 import com.ddayflip.app.core.domain.SequenceValidationResult
@@ -24,6 +25,7 @@ import com.ddayflip.app.domain.video.VideoExportConfig
 import com.ddayflip.app.service.PhotoScanForegroundService
 import com.ddayflip.app.service.ScanServiceState
 import com.ddayflip.app.ui.screens.CompleteScreen
+import com.ddayflip.app.ui.screens.ExportingScreen
 import com.ddayflip.app.ui.screens.ReviewScreen
 import com.ddayflip.app.ui.screens.ScanScreen
 import com.ddayflip.app.ui.screens.StartScreen
@@ -35,6 +37,7 @@ enum class AppScreen {
     START,
     SCAN,
     REVIEW,
+    EXPORTING,
     COMPLETE
 }
 
@@ -73,6 +76,9 @@ class MainActivity : ComponentActivity() {
                     var validationResult by remember {
                         mutableStateOf<SequenceValidationResult?>(null)
                     }
+                    var entriesToExport by remember {
+                        mutableStateOf<List<CalendarPhotoEntry>>(emptyList())
+                    }
                     var exportedVideoFile by remember { mutableStateOf<File?>(null) }
                     val exportConfig = remember { VideoExportConfig() }
 
@@ -98,7 +104,6 @@ class MainActivity : ComponentActivity() {
                                 onStartScan = { birthday, rule, roi, maxDday ->
                                     ddayRule = rule
                                     scanStartDate = birthday
-                                    // 1단계 목표: 생일 당일부터 약 150일간의 사진 스캔
                                     scanEndDate = birthday.plusDays(150)
                                     calendarRoi = roi
                                     todayMaxDday = maxDday
@@ -129,14 +134,28 @@ class MainActivity : ComponentActivity() {
                             ReviewScreen(
                                 issues = result?.issues ?: emptyList(),
                                 entries = result?.validatedEntries ?: emptyList(),
-                                onProceedToExport = { file ->
+                                onProceedToExport = { selectedList ->
+                                    entriesToExport = selectedList
+                                    currentScreen = AppScreen.EXPORTING
+                                }
+                            )
+                        }
+                        AppScreen.EXPORTING -> {
+                            ExportingScreen(
+                                entries = entriesToExport,
+                                onExportComplete = { file ->
                                     exportedVideoFile = file
                                     currentScreen = AppScreen.COMPLETE
+                                },
+                                onCancel = {
+                                    currentScreen = AppScreen.REVIEW
                                 }
                             )
                         }
                         AppScreen.COMPLETE -> {
-                            val entries = validationResult?.validatedEntries ?: emptyList()
+                            val entries = entriesToExport.ifEmpty {
+                                validationResult?.validatedEntries ?: emptyList()
+                            }
                             val totalFrames = exportConfig.calculateTotalFrames(entries.size)
                             val durationSeconds = exportConfig.calculateDurationMs(entries.size) / 1000.0
 
@@ -147,8 +166,12 @@ class MainActivity : ComponentActivity() {
                                 onRestart = {
                                     exportedVideoFile = null
                                     validationResult = null
+                                    entriesToExport = emptyList()
                                     PhotoScanForegroundService.resetState()
                                     currentScreen = AppScreen.START
+                                },
+                                onReedit = {
+                                    currentScreen = AppScreen.REVIEW
                                 }
                             )
                         }
@@ -169,7 +192,6 @@ class MainActivity : ComponentActivity() {
                 appScreenState.value = AppScreen.SCAN
             }
             is ScanServiceState.Completed -> {
-                // 이미 분석이 끝난 상태에서 알림 탭으로 복귀한 경우
                 appScreenState.value = AppScreen.SCAN
             }
             else -> {}

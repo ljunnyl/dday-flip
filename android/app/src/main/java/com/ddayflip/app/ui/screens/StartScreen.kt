@@ -1,25 +1,44 @@
 package com.ddayflip.app.ui.screens
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -28,12 +47,18 @@ import androidx.core.content.ContextCompat
 import com.ddayflip.app.core.domain.CalendarRoi
 import com.ddayflip.app.core.domain.DdayCalculator
 import com.ddayflip.app.core.domain.DdayStartRule
+import com.ddayflip.app.domain.ocr.DdayTextParser
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalDateTime
 
 /**
- * 01. 시작 & 아기 생일 및 D-day 달력 기준 사진 입력 화면
+ * R01. 첫 화면 (홈 & 온보딩) + R02. 기준 등록 (실제 사진 OCR 자동 감지 & 탭하여 직접 지정)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,27 +74,117 @@ fun StartScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
+    var isConfigMode by remember { mutableStateOf(false) }
+
     var birthdayYear by remember { mutableStateOf("2024") }
     var birthdayMonth by remember { mutableStateOf("05") }
-    var birthdayDay by remember { mutableStateOf("27") }
+    var birthdayDay by remember { mutableStateOf("21") }
     var selectedRule by remember { mutableStateOf(DdayStartRule.ONE_BASED) }
 
     var referencePhotoUri by remember { mutableStateOf<Uri?>(null) }
+    var referenceBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var selectedRoi by remember { mutableStateOf<CalendarRoi?>(null) }
+    var isDetectingRoi by remember { mutableStateOf(false) }
+    var detectedLabel by remember { mutableStateOf<String?>(null) }
+
+    // 비트맵 로드 및 실제 ML Kit 텍스트 감지 (달력 위치 자동 탐색)
+    LaunchedEffect(referencePhotoUri) {
+        val uri = referencePhotoUri
+        if (uri != null) {
+            val bmp = withContext(Dispatchers.IO) {
+                com.ddayflip.app.util.BitmapUtils.loadOrientedBitmap(context, uri, 1200)
+            }
+            referenceBitmap = bmp
+
+            if (bmp != null) {
+                isDetectingRoi = true
+                detectedLabel = "사진 속 D-day 달력 위치를 탐색하는 중..."
+                withContext(Dispatchers.Default) {
+                    try {
+                        val recognizer = TextRecognition.getClient(
+                            KoreanTextRecognizerOptions.Builder().build()
+                        )
+                        val inputImage = InputImage.fromBitmap(bmp, 0)
+                        recognizer.process(inputImage)
+                            .addOnSuccessListener { visionText ->
+                                val parser = DdayTextParser()
+                                var foundRoi: CalendarRoi? = null
+                                var foundText: String? = null
+
+                                // 1. D-day 파서 패턴(D+, 숫자일 등) 매칭 블록 우선 탐색
+                                for (block in visionText.textBlocks) {
+                                    val parsed = parser.parse(block.text)
+                                    if (parsed != null) {
+                                        val r = block.boundingBox
+                                        if (r != null) {
+                                            foundRoi = CalendarRoi(
+                                                x = (r.left.toFloat() / bmp.width).coerceIn(0f, 0.9f),
+                                                y = (r.top.toFloat() / bmp.height).coerceIn(0f, 0.9f),
+                                                width = (r.width().toFloat() / bmp.width).coerceIn(0.1f, 1f),
+                                                height = (r.height().toFloat() / bmp.height).coerceIn(0.1f, 1f)
+                                            ).withMargin(0.20f)
+                                            foundText = block.text.trim()
+                                            break
+                                        }
+                                    }
+                                }
+
+                                // 2. 숫자가 포함된 블록 차선 탐색
+                                if (foundRoi == null) {
+                                    for (block in visionText.textBlocks) {
+                                        if (block.text.any { it.isDigit() }) {
+                                            val r = block.boundingBox
+                                            if (r != null) {
+                                                foundRoi = CalendarRoi(
+                                                    x = (r.left.toFloat() / bmp.width).coerceIn(0f, 0.9f),
+                                                    y = (r.top.toFloat() / bmp.height).coerceIn(0f, 0.9f),
+                                                    width = (r.width().toFloat() / bmp.width).coerceIn(0.1f, 1f),
+                                                    height = (r.height().toFloat() / bmp.height).coerceIn(0.1f, 1f)
+                                                ).withMargin(0.20f)
+                                                foundText = block.text.trim()
+                                                break
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (foundRoi != null) {
+                                    selectedRoi = foundRoi
+                                    detectedLabel = "AI 달력 감지 성공: '$foundText' ✨ (터치하여 위치 이동 가능)"
+                                    Log.d("DdayScanner", "Reference Photo: Auto detected ROI at $foundRoi text=$foundText")
+                                } else {
+                                    // 텍스트 미감지 시: 사진 중앙 기본 박스 + 탭해서 직접 지정 유도
+                                    selectedRoi = CalendarRoi(0.25f, 0.15f, 0.50f, 0.40f)
+                                    detectedLabel = "달력 글씨를 자동 감지하지 못했어요. 달력이 있는 곳을 직접 탭해주세요! 👆"
+                                    Log.d("DdayScanner", "Reference Photo: Text not found, fallback to center ROI")
+                                }
+                                isDetectingRoi = false
+                            }
+                            .addOnFailureListener {
+                                selectedRoi = CalendarRoi(0.25f, 0.15f, 0.50f, 0.40f)
+                                detectedLabel = "달력이 있는 위치를 사진에서 직접 탭해주세요! 👆"
+                                isDetectingRoi = false
+                            }
+                    } catch (e: Exception) {
+                        selectedRoi = CalendarRoi(0.25f, 0.15f, 0.50f, 0.40f)
+                        detectedLabel = "달력이 있는 위치를 사진에서 직접 탭해주세요! 👆"
+                        isDetectingRoi = false
+                    }
+                }
+            }
+        } else {
+            referenceBitmap = null
+            selectedRoi = null
+            detectedLabel = null
+        }
+    }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         referencePhotoUri = uri
-        selectedRoi = if (uri != null) {
-            // 기준 사진 선택 시 상단 중앙 기본 D-day 달력 영역 설정
-            CalendarRoi(x = 0.15f, y = 0.05f, width = 0.70f, height = 0.35f)
-        } else {
-            null
-        }
     }
 
-    // 안드로이드 버전에 따른 권한 결정 (API 33+ READ_MEDIA_IMAGES, API 32 이하 READ_EXTERNAL_STORAGE)
     val requiredPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         Manifest.permission.READ_MEDIA_IMAGES
     } else {
@@ -78,8 +193,8 @@ fun StartScreen(
 
     fun proceedToScan() {
         val y = birthdayYear.toIntOrNull() ?: 2024
-        val m = birthdayMonth.toIntOrNull() ?: 1
-        val d = birthdayDay.toIntOrNull() ?: 1
+        val m = birthdayMonth.toIntOrNull() ?: 5
+        val d = birthdayDay.toIntOrNull() ?: 21
         val birthday = LocalDate.of(y, m, d)
         val todayMaxDday = DdayCalculator(birthday, selectedRule)
             .calculate(LocalDateTime.now()).dday
@@ -108,133 +223,255 @@ fun StartScreen(
                 title = { Text("D-day Flip", fontWeight = FontWeight.Bold) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
+                ),
+                actions = {
+                    if (isConfigMode) {
+                        TextButton(onClick = { isConfigMode = false }) {
+                            Text("홈으로", color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
             )
         }
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(24.dp),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
+        if (!isConfigMode) {
+            // ==========================================
+            // R01. 첫 화면 (홈 & 온보딩)
+            // ==========================================
             Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Privacy Guarantee Badge (100% On-Device)
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFFE8F5E9)
-                    ),
-                    shape = RoundedCornerShape(12.dp)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = "On-Device Privacy",
-                            tint = Color(0xFF2E7D32)
-                        )
-                        Column {
-                            Text(
-                                text = "100% 온디바이스 로컬 처리",
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF1B5E20),
-                                fontSize = 14.sp
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = Color(0xFF2E7D32),
+                                modifier = Modifier.size(20.dp)
                             )
                             Text(
-                                text = "사진과 개인정보가 기기 외부로 절대 유출되지 않습니다.",
-                                color = Color(0xFF2E7D32),
-                                fontSize = 12.sp
+                                text = "🔒 100% 온디바이스: 사진과 영상은 폰 안에서만 안전하게 만들어져요",
+                                color = Color(0xFF1B5E20),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(24.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(96.dp)
+                                    .clip(RoundedCornerShape(22.dp))
+                                    .background(Color(0xFF1F2421)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(60.dp, 70.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Color(0xFFE06D53)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "D+",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 24.sp
+                                    )
+                                }
+                            }
+
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "매일 자라나는 우리 아기,\n한 편의 영화가 되는 순간 ✨",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    lineHeight = 28.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "D-day 달력 사진을 찾아 날짜 순으로 착착 넘기는\n감성 릴스 영상으로 만들어 드려요.",
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    lineHeight = 18.sp
+                                )
+                            }
+                        }
+                    }
+
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF9F7F4)),
+                        shape = RoundedCornerShape(18.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, Color(0xFFE5E0D8), RoundedCornerShape(18.dp))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(54.dp, 64.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFFE06D53)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.Movie, contentDescription = null, tint = Color.White)
+                            }
+                            Column {
+                                Text(
+                                    text = "1일 1장 최고 선명도 자동 선별",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                                Text(
+                                    text = "하루에 여러 장 찍어도 가장 또렷한 1장만 골라줘요",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Button(
+                    onClick = { isConfigMode = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text("디데이 영상 만들기 시작 ✨", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
+            }
+        } else {
+            // ==========================================
+            // R02. 기준 등록 (실제 사진 OCR 자동 감지 & 탭하여 직접 지정)
+            // ==========================================
+            val scrollState = rememberScrollState()
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .verticalScroll(scrollState)
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                Text(
+                    text = "우리 아기 생일 및 기준 설정",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                // 생일 입력 카드
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "아기 생년월일 (실제 날짜 입력)",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = birthdayYear,
+                                onValueChange = { birthdayYear = it },
+                                label = { Text("연도") },
+                                modifier = Modifier.weight(1.4f),
+                                singleLine = true
+                            )
+                            OutlinedTextField(
+                                value = birthdayMonth,
+                                onValueChange = { birthdayMonth = it },
+                                label = { Text("월") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+                            OutlinedTextField(
+                                value = birthdayDay,
+                                onValueChange = { birthdayDay = it },
+                                label = { Text("일") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = selectedRule == DdayStartRule.ONE_BASED,
+                                onClick = { selectedRule = DdayStartRule.ONE_BASED },
+                                label = { Text("생일 당일 D+1 (한국식)") },
+                                modifier = Modifier.weight(1f)
+                            )
+                            FilterChip(
+                                selected = selectedRule == DdayStartRule.ZERO_BASED,
+                                onClick = { selectedRule = DdayStartRule.ZERO_BASED },
+                                label = { Text("생일 당일 D+0 (서양식)") },
+                                modifier = Modifier.weight(1f)
                             )
                         }
                     }
                 }
 
-                Text(
-                    text = "아기 생일을 알려주세요",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Text(
-                    text = "촬영일시와 D-day 달력 숫자를 비교하여 누락되거나 미넘김된 날짜를 자동으로 감지합니다.",
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                // Birthday Input Row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    OutlinedTextField(
-                        value = birthdayYear,
-                        onValueChange = { birthdayYear = it },
-                        label = { Text("연도") },
-                        modifier = Modifier.weight(1.5f),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = birthdayMonth,
-                        onValueChange = { birthdayMonth = it },
-                        label = { Text("월") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = birthdayDay,
-                        onValueChange = { birthdayDay = it },
-                        label = { Text("일") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true
-                    )
-                }
-
-                // D-day Counting Rule Selection
-                Text(
-                    text = "D-day 표기 규칙",
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 15.sp
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilterChip(
-                        selected = selectedRule == DdayStartRule.ONE_BASED,
-                        onClick = { selectedRule = DdayStartRule.ONE_BASED },
-                        label = { Text("생일 당일 D+1 (한국식)") },
-                        modifier = Modifier.weight(1f)
-                    )
-                    FilterChip(
-                        selected = selectedRule == DdayStartRule.ZERO_BASED,
-                        onClick = { selectedRule = DdayStartRule.ZERO_BASED },
-                        label = { Text("생일 당일 D+0 (서양식)") },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                // 기준 D-day 달력 사진 1장 선택 (선택사항)
+                // ==========================================
+                // 기준 D-day 달력 사진 등록 및 시각 검증
+                // ==========================================
                 Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    ),
-                    shape = RoundedCornerShape(12.dp)
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFBF9F6)),
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(2.dp, Color(0xFFE06D53), RoundedCornerShape(20.dp))
                 ) {
                     Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -242,27 +479,22 @@ fun StartScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "기준 D-day 달력 사진 1장 선택 (선택사항)",
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 13.sp
+                                text = "우리 집 D-day 달력 기준 사진 등록",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
-                            if (referencePhotoUri != null) {
-                                TextButton(
-                                    onClick = {
-                                        referencePhotoUri = null
-                                        selectedRoi = null
-                                    },
-                                    contentPadding = PaddingValues(0.dp)
-                                ) {
-                                    Text("선택 해제", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
-                                }
+                            Badge(containerColor = Color(0xFFFFECE5)) {
+                                Text("핵심 개선 ✨", color = Color(0xFFE06D53), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             }
                         }
+
                         Text(
-                            text = "D-day 달력이 잘 나온 사진 1장을 지정하면 위치를 자동 참조하여 인식 정확도가 대폭 향상됩니다.",
+                            text = "달력이 나온 사진 1장을 고르면 앱이 달력 위치를 찾고, 원하는 위치를 직접 탭하여 지정할 수도 있어요.",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+
                         if (referencePhotoUri == null) {
                             OutlinedButton(
                                 onClick = {
@@ -270,60 +502,197 @@ fun StartScreen(
                                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                     )
                                 },
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(50.dp),
+                                shape = RoundedCornerShape(12.dp)
                             ) {
-                                Icon(Icons.Default.Add, contentDescription = null)
+                                Icon(Icons.Default.PhotoCamera, contentDescription = null, tint = Color(0xFFE06D53))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("기준 사진 선택하기", fontSize = 13.sp)
+                                Text("기준 사진 고르기 (아기 침대/달력 사진)", color = Color(0xFFE06D53), fontWeight = FontWeight.Bold)
                             }
                         } else {
+                            // 사진 프리뷰 + 탭하여 위치 이동 지원
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(240.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(Color(0xFF2B2E2C))
+                                    .pointerInput(referenceBitmap) {
+                                        detectTapGestures { offset ->
+                                            val tapXFrac = offset.x / size.width
+                                            val tapYFrac = offset.y / size.height
+                                            val boxW = 0.35f
+                                            val boxH = 0.25f
+                                            selectedRoi = CalendarRoi(
+                                                x = (tapXFrac - boxW / 2).coerceIn(0f, 1f - boxW),
+                                                y = (tapYFrac - boxH / 2).coerceIn(0f, 1f - boxH),
+                                                width = boxW,
+                                                height = boxH
+                                            )
+                                            detectedLabel = "달력 위치를 직접 지정했어요 🎯 (원하는 곳을 다시 탭 가능)"
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                val bmp = referenceBitmap
+                                if (bmp != null) {
+                                    Image(
+                                        bitmap = bmp.asImageBitmap(),
+                                        contentDescription = "기준 사진 미리보기",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+
+                                    val roi = selectedRoi
+                                    if (roi != null) {
+                                        Canvas(modifier = Modifier.fillMaxSize()) {
+                                            val w = size.width
+                                            val h = size.height
+
+                                            val left = roi.x * w
+                                            val top = roi.y * h
+                                            val boxW = roi.width * w
+                                            val boxH = roi.height * h
+
+                                            // 달력 감지 박스 (주황색 테두리)
+                                            drawRect(
+                                                color = Color(0xFFE06D53),
+                                                topLeft = Offset(left, top),
+                                                size = Size(boxW, boxH),
+                                                style = Stroke(width = 6f)
+                                            )
+                                        }
+
+                                        Surface(
+                                            color = Color(0xFFE06D53),
+                                            shape = RoundedCornerShape(6.dp),
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd)
+                                                .padding(10.dp)
+                                        ) {
+                                            Text(
+                                                text = if (isDetectingRoi) "달력 찾는 중..." else "달력 영역 지정됨 🎯",
+                                                color = Color.White,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    CircularProgressIndicator(color = Color(0xFFE06D53))
+                                }
+                            }
+
+                            // 감지 결과 피드백 & 탭 안내
                             Surface(
-                                color = MaterialTheme.colorScheme.primaryContainer,
-                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFFF1F8E9),
+                                shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(10.dp),
+                                    modifier = Modifier.padding(12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.CheckCircle,
+                                        imageVector = Icons.Default.TouchApp,
                                         contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary
+                                        tint = Color(0xFF2E7D32)
                                     )
                                     Text(
-                                        text = "기준 사진 선택됨: D-day 달력 위치 자동 설정됨",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        text = detectedLabel ?: "사진에서 실제 달력이 놓인 자리를 직접 탭해주세요!",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF1B5E20),
+                                        fontWeight = FontWeight.Medium
                                     )
+                                }
+                            }
+
+                            // 버튼 옵션 행
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        photoPickerLauncher.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                        )
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Text("📷 다른 사진", fontSize = 12.sp)
+                                }
+                                TextButton(
+                                    onClick = {
+                                        selectedRoi = null
+                                        detectedLabel = "위치 제한 없이 전체 사진에서 탐색합니다."
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("전체 탐색", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            // Start Scanning Button
-            Button(
-                onClick = {
-                    val permissionStatus = ContextCompat.checkSelfPermission(context, requiredPermission)
-                    if (permissionStatus == PackageManager.PERMISSION_GRANTED) {
-                        proceedToScan()
-                    } else {
-                        permissionLauncher.launch(requiredPermission)
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(54.dp),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Icon(Icons.Default.CalendarMonth, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("갤러리 스캔 및 D-day 달력 분류 시작", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // 스캔 시작 CTA
+                Button(
+                    onClick = {
+                        val permissionStatus = ContextCompat.checkSelfPermission(context, requiredPermission)
+                        if (permissionStatus == PackageManager.PERMISSION_GRANTED) {
+                            proceedToScan()
+                        } else {
+                            permissionLauncher.launch(requiredPermission)
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = Color.White)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("내 사진에서 달력 사진 찾기 시작 →", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
             }
         }
+    }
+}
+
+private fun loadSampledBitmap(context: Context, uri: Uri, reqWidth: Int, reqHeight: Int): Bitmap? {
+    return try {
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+            BitmapFactory.decodeStream(stream, null, options)
+
+            var inSampleSize = 1
+            if (options.outHeight > reqHeight || options.outWidth > reqWidth) {
+                val halfHeight = options.outHeight / 2
+                val halfWidth = options.outWidth / 2
+                while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
+                    inSampleSize *= 2
+                }
+            }
+
+            context.contentResolver.openInputStream(uri)?.use { secondStream ->
+                val decodeOptions = BitmapFactory.Options().apply {
+                    this.inSampleSize = inSampleSize
+                }
+                BitmapFactory.decodeStream(secondStream, null, decodeOptions)
+            }
+        }
+    } catch (e: Exception) {
+        null
     }
 }

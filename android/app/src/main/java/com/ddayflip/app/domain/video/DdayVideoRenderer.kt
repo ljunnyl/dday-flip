@@ -137,9 +137,7 @@ object DdayVideoRenderer {
         if (uriString.isBlank()) return null
         return try {
             val uri = Uri.parse(uriString)
-            context.contentResolver.openInputStream(uri)?.use { stream ->
-                BitmapFactory.decodeStream(stream)
-            }
+            com.ddayflip.app.util.BitmapUtils.loadOrientedBitmap(context, uri, 1920)
         } catch (e: Exception) {
             null
         }

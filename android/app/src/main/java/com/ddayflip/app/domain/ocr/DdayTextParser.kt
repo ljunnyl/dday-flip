@@ -17,7 +17,8 @@ data class DdayParseResult(
 
 /**
  * 온디바이스 OCR 텍스트에서 D-day 숫자를 추출하고 노이즈를 필터링하는 파서.
- * 순수 Kotlin 로직 (UI 및 안드로이드 Bitmap 비의존적).
+ * - 우드 블록 띄어쓰기 ("1 5 5 일", "❤️ 1 5 5 일") 지원
+ * - "D+150", "D 150", "150일", 단독 숫자 등 유연한 파싱
  */
 class DdayTextParser {
 
@@ -34,17 +35,17 @@ class DdayTextParser {
         // 흔한 해상도 치수 단독 숫자
         private val COMMON_RESOLUTIONS = setOf(720, 1080, 1440, 1920, 2160, 3024, 4032)
 
-        // D+ 패턴 (줄바꿈/공백 허용): D+143, D + 150, D+\n143
-        private val DP_REGEX = Regex("""(?i)(?:^|[^a-zA-Z0-9])D\s*\+\s*(\d+)\b""")
+        // D+ 패턴 (공백/줄바꿈 허용): D+143, D + 150, D + 1 5 5
+        private val DP_REGEX = Regex("""(?i)(?:^|[^a-zA-Z0-9가-힣])D\s*\+\s*(\d(?:\s*\d){0,3})(?=[^\d가-힣a-zA-Z]|$)""")
 
         // D- 패턴: D-5, D - 3
-        private val DM_REGEX = Regex("""(?i)(?:^|[^a-zA-Z0-9])D\s*-\s*(\d+)\b""")
+        private val DM_REGEX = Regex("""(?i)(?:^|[^a-zA-Z0-9가-힣])D\s*-\s*(\d(?:\s*\d){0,3})(?=[^\d가-힣a-zA-Z]|$)""")
 
-        // D [공백] [숫자] 패턴: D 99
-        private val D_SPACE_REGEX = Regex("""(?i)(?:^|[^a-zA-Z0-9])D\s+(\d+)\b""")
+        // D [공백] [숫자] 패턴: D 99, D 1 5 5
+        private val D_SPACE_REGEX = Regex("""(?i)(?:^|[^a-zA-Z0-9가-힣])D\s+(\d(?:\s*\d){0,3})(?=[^\d가-힣a-zA-Z]|$)""")
 
-        // [숫자]일 패턴: 145일
-        private val DAY_KOR_REGEX = Regex("""(?:^|[^a-zA-Z0-9])(\d+)\s*일\b""")
+        // [숫자]일 패턴 (우드 블록 띄어쓰기 "1 5 5 일", "❤️ 1 5 5 일", "155일" 완벽 지원)
+        private val DAY_KOR_REGEX = Regex("""(?i)(?:^|[^\d가-힣a-zA-Z])(\d(?:\s*\d){0,3})\s*일(?=[^\w가-힣]|$)""")
 
         // 단독 숫자 패턴
         private val STANDALONE_NUMBER_REGEX = Regex("""\b(\d{1,4})\b""")
@@ -53,7 +54,7 @@ class DdayTextParser {
     private data class Candidate(
         val dday: Int,
         val rawText: String,
-        val priority: Int, // 1: 최우선 (D+, D-), 2: 차선 (D 99, 145일), 3: 단독 숫자
+        val priority: Int, // 1: 최우선 (D+, D-, [숫자]일), 2: 차선 (D 99), 3: 단독 숫자
         val baseConfidence: Float
     )
 
@@ -62,7 +63,6 @@ class DdayTextParser {
      */
     fun parse(blocks: List<String>, expectedDay: Int? = null): DdayParseResult? {
         if (blocks.isEmpty()) return null
-        // 블록들을 개행과 공백으로 합친 통합 텍스트 생성
         val joined = blocks.joinToString(" ")
         return parse(joined, expectedDay)
     }
@@ -81,36 +81,38 @@ class DdayTextParser {
 
         val candidates = mutableListOf<Candidate>()
 
-        // 2-1. D+ 패턴 매칭
+        // 2-1. [숫자]일 매칭 ("1 5 5 일", "❤️ 1 5 5 일", "155일") -> 최우선(Priority 1)
+        for (match in DAY_KOR_REGEX.findAll(cleanedText)) {
+            val rawDigits = match.groupValues[1].replace("\\s+".toRegex(), "")
+            val num = rawDigits.toIntOrNull() ?: continue
+            candidates.add(Candidate(num, match.value.trim(), priority = 1, baseConfidence = 0.98f))
+        }
+
+        // 2-2. D+ 패턴 매칭
         for (match in DP_REGEX.findAll(cleanedText)) {
-            val num = match.groupValues[1].toIntOrNull() ?: continue
+            val rawDigits = match.groupValues[1].replace("\\s+".toRegex(), "")
+            val num = rawDigits.toIntOrNull() ?: continue
             candidates.add(Candidate(num, match.value.trim(), priority = 1, baseConfidence = 0.95f))
         }
 
-        // 2-2. D- 패턴 매칭
+        // 2-3. D- 패턴 매칭
         for (match in DM_REGEX.findAll(cleanedText)) {
-            val num = match.groupValues[1].toIntOrNull() ?: continue
+            val rawDigits = match.groupValues[1].replace("\\s+".toRegex(), "")
+            val num = rawDigits.toIntOrNull() ?: continue
             candidates.add(Candidate(num, match.value.trim(), priority = 1, baseConfidence = 0.90f))
         }
 
-        // 2-3. D [공백] [숫자] 매칭
+        // 2-4. D [공백] [숫자] 매칭
         for (match in D_SPACE_REGEX.findAll(cleanedText)) {
-            val num = match.groupValues[1].toIntOrNull() ?: continue
+            val rawDigits = match.groupValues[1].replace("\\s+".toRegex(), "")
+            val num = rawDigits.toIntOrNull() ?: continue
             candidates.add(Candidate(num, match.value.trim(), priority = 2, baseConfidence = 0.88f))
         }
 
-        // 2-4. [숫자]일 매칭
-        for (match in DAY_KOR_REGEX.findAll(cleanedText)) {
-            val num = match.groupValues[1].toIntOrNull() ?: continue
-            candidates.add(Candidate(num, match.value.trim(), priority = 2, baseConfidence = 0.85f))
-        }
-
-        // 2-5. 단독 숫자 매칭 (명시적 패턴이 없는 경우를 위한 후보 수집)
+        // 2-5. 단독 숫자 매칭
         for (match in STANDALONE_NUMBER_REGEX.findAll(cleanedText)) {
             val num = match.groupValues[1].toIntOrNull() ?: continue
-            // 연도 필터링 (1900~2099)
             if (num in 1900..2099) continue
-            // 해상도 노이즈 필터링
             if (num in COMMON_RESOLUTIONS) continue
 
             candidates.add(Candidate(num, match.value.trim(), priority = 3, baseConfidence = 0.50f))
@@ -119,9 +121,6 @@ class DdayTextParser {
         if (candidates.isEmpty()) return null
 
         // 3. 최적 후보 선별
-        // 우선순위:
-        // priority 1, 2(명시적 D-day 패턴)는 priority 3(단독 숫자)보다 무조건 우선.
-        // 각 priority 그룹 내에서 expectedDay와의 거리 및 점수 계산.
         val bestCandidate = candidates.minWithOrNull(
             compareBy<Candidate> { it.priority }
                 .thenBy { candidate ->
@@ -134,7 +133,6 @@ class DdayTextParser {
                 .thenByDescending { it.baseConfidence }
         ) ?: return null
 
-        // 최종 신뢰도 계산
         val finalConfidence = calculateConfidence(bestCandidate, expectedDay)
 
         return DdayParseResult(
@@ -149,15 +147,13 @@ class DdayTextParser {
         if (expectedDay != null) {
             val distance = abs(candidate.dday - expectedDay)
             if (candidate.priority == 3) {
-                // 단독 숫자는 거리에 따라 신뢰도 가감
                 conf = maxOf(0.1f, conf / (1f + distance * 0.05f))
             } else {
-                // 명시적 D-day 패턴은 거리가 가까우면 신뢰도 소폭 상승
                 if (distance <= 5) {
                     conf = minOf(1.0f, conf + 0.04f)
                 }
             }
         }
-        return (conf * 100).toInt() / 100f // 소수점 둘째 자리 정리
+        return (conf * 100).toInt() / 100f
     }
 }

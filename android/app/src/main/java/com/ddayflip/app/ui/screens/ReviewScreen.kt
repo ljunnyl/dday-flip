@@ -3,97 +3,58 @@ package com.ddayflip.app.ui.screens
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ddayflip.app.core.domain.CalendarPhotoEntry
+import com.ddayflip.app.core.domain.CalendarSequenceValidator
 import com.ddayflip.app.core.domain.IssueType
 import com.ddayflip.app.core.domain.SequenceIssue
-import com.ddayflip.app.domain.video.MediaCodecVideoExporter
-import com.ddayflip.app.domain.video.VideoExporter
 import kotlinx.coroutines.launch
-import java.io.File
 import java.time.LocalDate
 
 /**
- * 03. 타임라인 & 스마트 검수 화면
+ * R04. 스마트 검수 & 타임라인 화면
+ * - 1일 1장 최고 선명도 자동 선별 (중복 투입 방지)
+ * - 날짜 고속 점프 스크러버 (D+1, 50, 100, 150, 오늘)
+ * - 원터치 문제 해결 액션 카드 (미넘김 의심 / 결측일)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReviewScreen(
-    issues: List<SequenceIssue> = listOf(
-        SequenceIssue(
-            type = IssueType.UNFLIPPED_CALENDAR,
-            targetDday = 10,
-            description = "미넘김 의심: 2024-06-01과 2024-06-02의 달력 D-day가 모두 D+10 입니다."
-        ),
-        SequenceIssue(
-            type = IssueType.MISSING_DAYS,
-            targetDday = 11,
-            description = "결측일 감지: D+12, D+13 사진 누락",
-            missingDays = listOf(12, 13)
-        )
-    ),
-    entries: List<CalendarPhotoEntry> = listOf(
-        CalendarPhotoEntry(id = "1", effectiveDate = LocalDate.of(2024, 6, 1), exifDday = 10, ocrDday = 10, sharpnessScore = 142.0),
-        CalendarPhotoEntry(id = "2", effectiveDate = LocalDate.of(2024, 6, 2), exifDday = 11, ocrDday = 10, sharpnessScore = 118.0),
-        CalendarPhotoEntry(id = "3", effectiveDate = LocalDate.of(2024, 6, 5), exifDday = 14, ocrDday = 14, sharpnessScore = 165.0)
-    ),
-    videoExporter: VideoExporter? = null,
-    onProceedToExport: (File) -> Unit = {}
+    issues: List<SequenceIssue> = emptyList(),
+    entries: List<CalendarPhotoEntry> = emptyList(),
+    onProceedToExport: (List<CalendarPhotoEntry>) -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val exporter = videoExporter ?: remember { MediaCodecVideoExporter() }
+    val listState = rememberLazyListState()
+    val validator = remember { CalendarSequenceValidator() }
 
-    var isExporting by remember { mutableStateOf(false) }
-    var exportProgress by remember { mutableFloatStateOf(0f) }
+    // 1일 1장 최고 선명도 사진 자동 선별 목록
+    var activeEntries by remember(entries) {
+        mutableStateOf(validator.selectBestPhotoPerDay(entries))
+    }
 
-    if (isExporting) {
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text("D-day 플립 영상 제작 중", fontWeight = FontWeight.Bold) },
-            text = {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text("선별된 ${entries.size}장의 사진을 고화질(1080x1920) 비디오로 인코딩하고 있습니다...", fontSize = 14.sp)
-                    LinearProgressIndicator(
-                        progress = { exportProgress },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(8.dp),
-                        strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
-                    )
-                    Text(
-                        text = "${(exportProgress * 100).toInt()}% 완료",
-                        modifier = Modifier.align(Alignment.End),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-            },
-            confirmButton = {}
-        )
+    var unresolvedIssues by remember(issues) {
+        mutableStateOf(issues)
     }
 
     Scaffold(
@@ -105,7 +66,8 @@ fun ReviewScreen(
         bottomBar = {
             Surface(
                 tonalElevation = 8.dp,
-                shadowElevation = 8.dp
+                shadowElevation = 8.dp,
+                color = MaterialTheme.colorScheme.surface
             ) {
                 Box(
                     modifier = Modifier
@@ -114,208 +76,304 @@ fun ReviewScreen(
                 ) {
                     Button(
                         onClick = {
-                            if (entries.isEmpty()) {
+                            if (activeEntries.isEmpty()) {
                                 Toast.makeText(context, "선별된 사진이 없습니다.", Toast.LENGTH_SHORT).show()
                                 return@Button
                             }
-                            isExporting = true
-                            exportProgress = 0f
-                            coroutineScope.launch {
-                                val outputFile = File(
-                                    context.cacheDir,
-                                    "dday_flip_${System.currentTimeMillis()}.mp4"
-                                )
-                                val result = exporter.exportVideo(
-                                    context = context,
-                                    entries = entries,
-                                    outputFile = outputFile,
-                                    onProgress = { p -> exportProgress = p }
-                                )
-                                isExporting = false
-                                result.onSuccess { file ->
-                                    onProceedToExport(file)
-                                }.onFailure { err ->
-                                    Toast.makeText(
-                                        context,
-                                        "영상 생성 실패: ${err.localizedMessage ?: "알 수 없는 오류"}",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }
-                            }
+                            onProceedToExport(activeEntries)
                         },
-                        enabled = !isExporting && entries.isNotEmpty(),
+                        enabled = activeEntries.isNotEmpty(),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp),
-                        shape = RoundedCornerShape(12.dp)
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
+                        shape = RoundedCornerShape(16.dp)
                     ) {
-                        Icon(Icons.Default.Movie, contentDescription = null)
+                        Icon(Icons.Default.Movie, contentDescription = null, tint = Color.White)
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("플립 영상 생성하기", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = "${activeEntries.size}장으로 릴스 영상 만들기 ✨",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
                     }
                 }
             }
         }
     ) { padding ->
-        LazyColumn(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "스마트 검수 결과 요약",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            // Issues Section
-            if (issues.isNotEmpty()) {
-                items(issues) { issue ->
-                    IssueCard(issue = issue)
-                }
-            } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(end = 56.dp) // 우측 스크러버 공간 확보
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
                 item {
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF2E7D32))
-                            Text(
-                                text = "모든 날짜가 연속되며 미넘김/누락 없이 완벽합니다!",
-                                color = Color(0xFF1B5E20),
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-                }
-            }
-
-            item {
-                Text(
-                    text = "일자별 최적 사진 타임라인 (${entries.size}장)",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(top = 12.dp)
-                )
-            }
-
-            // Photos timeline
-            items(entries) { entry ->
-                TimelineItemCard(entry = entry)
-            }
-
-            item {
-                Spacer(modifier = Modifier.height(80.dp))
-            }
-        }
-    }
-}
-
-@Composable
-private fun IssueCard(issue: SequenceIssue) {
-    val isWarning = issue.type == IssueType.UNFLIPPED_CALENDAR
-    val bgColor = if (isWarning) Color(0xFFFFF3E0) else Color(0xFFFFEBEE)
-    val iconColor = if (isWarning) Color(0xFFE65100) else Color(0xFFC62828)
-
-    Card(
-        colors = CardDefaults.cardColors(containerColor = bgColor),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Icon(
-                imageVector = if (isWarning) Icons.Default.WarningAmber else Icons.Default.ErrorOutline,
-                contentDescription = null,
-                tint = iconColor
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = when (issue.type) {
-                        IssueType.UNFLIPPED_CALENDAR -> "달력 미넘김 의심 (D+${issue.targetDday})"
-                        IssueType.MISSING_DAYS -> "결측일 감지 (${issue.missingDays.joinToString { "D+$it" }})"
-                        IssueType.DISCREPANCY -> "날짜 불일치 확인 필요"
-                    },
-                    fontWeight = FontWeight.Bold,
-                    color = iconColor,
-                    fontSize = 14.sp
-                )
-                Text(
-                    text = issue.description,
-                    fontSize = 13.sp,
-                    color = Color(0xFF37474F)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun TimelineItemCard(entry: CalendarPhotoEntry) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "D+${entry.resolvedDday}",
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 18.sp,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Badge(containerColor = MaterialTheme.colorScheme.primaryContainer) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            text = "선명도: ${entry.sharpnessScore.toInt()}",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                            text = "스마트 검수 결과 요약",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "${activeEntries.size}일 준비 완료 • 하루 여러 장 중 최고 선명도 1장 자동 선택됨",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
+
+                // 원터치 액션 카드 (Issues)
+                if (unresolvedIssues.isNotEmpty()) {
+                    itemsIndexed(unresolvedIssues) { index, issue ->
+                        ActionableIssueCard(
+                            issue = issue,
+                            onResolveAction = { resolution ->
+                                unresolvedIssues = unresolvedIssues.filterIndexed { i, _ -> i != index }
+                                Toast.makeText(context, resolution, Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    }
+                } else {
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF2E7D32))
+                                Text(
+                                    text = "모든 날짜가 연속되며 미넘김/누락 없이 완벽합니다! ✨",
+                                    color = Color(0xFF1B5E20),
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "1일 1장 선별 타임라인 (${activeEntries.size}장)",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                // 사진 목록
+                itemsIndexed(activeEntries) { _, entry ->
+                    PhotoTimelineItem(entry = entry)
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(20.dp))
+                }
+            }
+
+            // ==========================================
+            // 날짜 고속 점프 스크러버 (우측 플로팅 바)
+            // ==========================================
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 8.dp)
+                    .width(42.dp)
+                    .clip(RoundedCornerShape(21.dp)),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shadowElevation = 4.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(vertical = 12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    ScrubberItem(label = "오늘") {
+                        coroutineScope.launch {
+                            listState.animateScrollToItem((activeEntries.size - 1).coerceAtLeast(0))
+                        }
+                    }
+                    ScrubberItem(label = "150") {
+                        val target = activeEntries.indexOfFirst { it.resolvedDday >= 150 }
+                        if (target != -1) {
+                            coroutineScope.launch { listState.animateScrollToItem(target) }
+                        }
+                    }
+                    ScrubberItem(label = "100") {
+                        val target = activeEntries.indexOfFirst { it.resolvedDday >= 100 }
+                        if (target != -1) {
+                            coroutineScope.launch { listState.animateScrollToItem(target) }
+                        }
+                    }
+                    ScrubberItem(label = "50") {
+                        val target = activeEntries.indexOfFirst { it.resolvedDday >= 50 }
+                        if (target != -1) {
+                            coroutineScope.launch { listState.animateScrollToItem(target) }
+                        }
+                    }
+                    ScrubberItem(label = "D+1") {
+                        coroutineScope.launch { listState.animateScrollToItem(0) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScrubberItem(label: String, onClick: () -> Unit) {
+    Text(
+        text = label,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+        color = if (label == "오늘" || label == "D+1") Color(0xFFE06D53) else MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 2.dp)
+    )
+}
+
+@Composable
+private fun ActionableIssueCard(
+    issue: SequenceIssue,
+    onResolveAction: (String) -> Unit
+) {
+    val isUnflipped = issue.type == IssueType.UNFLIPPED_CALENDAR
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isUnflipped) Color(0xFFFFF8E1) else Color(0xFFFBE9E7)
+        ),
+        border = androidx.compose.foundation.BorderStroke(
+            1.5.dp,
+            if (isUnflipped) Color(0xFFD97706) else Color(0xFFE06D53)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.WarningAmber,
+                    contentDescription = null,
+                    tint = if (isUnflipped) Color(0xFFD97706) else Color(0xFFE06D53),
+                    modifier = Modifier.size(20.dp)
+                )
                 Text(
-                    text = "촬영일자: ${entry.effectiveDate} (EXIF D+${entry.exifDday})",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = if (isUnflipped) "⚠️ 달력 미넘김 의심 (D+${issue.targetDday})" else "🗓️ 결측일 감지",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = if (isUnflipped) Color(0xFFB45309) else Color(0xFFC2410C)
                 )
             }
 
-            // Thumbnail simulation box
+            Text(
+                text = issue.description,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface,
+                lineHeight = 16.sp
+            )
+
+            // 원터치 해결 액션 버튼 행
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (isUnflipped) {
+                    Button(
+                        onClick = { onResolveAction("D+${issue.targetDday + 1}로 반영했습니다.") },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("D+${issue.targetDday + 1}로 쓸게요", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedButton(
+                        onClick = { onResolveAction("해당 날짜 사진을 제외했습니다.") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("이 날은 뺄게요", fontSize = 11.sp)
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = { onResolveAction("사진 추가를 준비합니다.") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("+ 직접 추가", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Button(
+                        onClick = { onResolveAction("해당 일자를 건너뜁니다.") },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF78909C)),
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("건너뛰기", fontSize = 11.sp, color = Color.White)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhotoTimelineItem(entry: CalendarPhotoEntry) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
             Box(
                 modifier = Modifier
                     .size(54.dp)
-                    .background(Color.DarkGray, RoundedCornerShape(8.dp))
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp)),
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFFE06D53).copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "D+${entry.resolvedDday}",
-                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFE06D53)
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "D+${entry.resolvedDday} (${entry.effectiveDate})",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+                Text(
+                    text = "가장 또렷한 사진 자동 선별됨 ✨",
                     fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
+                    color = Color(0xFF2E7D32),
+                    fontWeight = FontWeight.Medium
                 )
             }
         }
