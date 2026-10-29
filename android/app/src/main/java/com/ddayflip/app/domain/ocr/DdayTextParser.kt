@@ -8,11 +8,13 @@ import kotlin.math.abs
  * @param dday 파싱된 D-day 일수
  * @param rawText 매칭된 원본 텍스트 조각
  * @param confidence 신뢰도 (0.0f ~ 1.0f)
+ * @param isExplicit "D+", "D-", "[숫자]일", "D 99" 등 명시적 달력 포맷 여부 (단독 숫자는 false)
  */
 data class DdayParseResult(
     val dday: Int,
     val rawText: String,
-    val confidence: Float
+    val confidence: Float,
+    val isExplicit: Boolean = false
 )
 
 /**
@@ -138,7 +140,8 @@ class DdayTextParser {
         return DdayParseResult(
             dday = bestCandidate.dday,
             rawText = bestCandidate.rawText,
-            confidence = finalConfidence
+            confidence = finalConfidence,
+            isExplicit = (bestCandidate.priority <= 2)
         )
     }
 

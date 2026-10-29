@@ -73,6 +73,7 @@ class MainActivity : ComponentActivity() {
                     var ddayRule by remember { mutableStateOf(DdayStartRule.ONE_BASED) }
                     var calendarRoi by remember { mutableStateOf<CalendarRoi?>(null) }
                     var todayMaxDday by remember { mutableIntStateOf(150) }
+                    var accuracyMode by remember { mutableStateOf(com.ddayflip.app.core.domain.ScanAccuracyMode.STRICT) }
                     var validationResult by remember {
                         mutableStateOf<SequenceValidationResult?>(null)
                     }
@@ -101,13 +102,22 @@ class MainActivity : ComponentActivity() {
                     when (currentScreen) {
                         AppScreen.START -> {
                             StartScreen(
-                                onStartScan = { birthday, rule, roi, maxDday ->
+                                onStartScan = { birthday, rule, roi, maxDday, mode ->
                                     ddayRule = rule
                                     scanStartDate = birthday
                                     scanEndDate = birthday.plusDays(150)
                                     calendarRoi = roi
                                     todayMaxDday = maxDday
+                                    accuracyMode = mode
                                     currentScreen = AppScreen.SCAN
+                                },
+                                onDirectPhotosSelected = { directEntries ->
+                                    validationResult = SequenceValidationResult(
+                                        validatedEntries = directEntries,
+                                        issues = emptyList(),
+                                        missingDays = emptyList()
+                                    )
+                                    currentScreen = AppScreen.REVIEW
                                 }
                             )
                         }
@@ -119,6 +129,7 @@ class MainActivity : ComponentActivity() {
                                 ddayRule = ddayRule,
                                 calendarRoi = calendarRoi,
                                 todayMaxDday = todayMaxDday,
+                                accuracyMode = accuracyMode,
                                 photoRepository = photoRepository,
                                 onCancelScan = {
                                     currentScreen = AppScreen.START

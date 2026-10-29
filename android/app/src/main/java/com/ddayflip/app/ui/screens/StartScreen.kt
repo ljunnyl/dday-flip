@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -48,9 +49,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.ddayflip.app.core.domain.CalendarPhotoEntry
 import com.ddayflip.app.core.domain.CalendarRoi
 import com.ddayflip.app.core.domain.DdayCalculator
 import com.ddayflip.app.core.domain.DdayStartRule
+import com.ddayflip.app.core.domain.ScanAccuracyMode
 import com.ddayflip.app.domain.ocr.DdayTextParser
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
@@ -71,8 +74,10 @@ fun StartScreen(
         birthday: LocalDate,
         rule: DdayStartRule,
         calendarRoi: CalendarRoi?,
-        todayMaxDday: Int
-    ) -> Unit = { _, _, _, _ -> }
+        todayMaxDday: Int,
+        accuracyMode: ScanAccuracyMode
+    ) -> Unit = { _, _, _, _, _ -> },
+    onDirectPhotosSelected: (List<CalendarPhotoEntry>) -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -84,6 +89,7 @@ fun StartScreen(
     var birthdayMonth by remember { mutableStateOf("05") }
     var birthdayDay by remember { mutableStateOf("27") }
     var selectedRule by remember { mutableStateOf(DdayStartRule.ONE_BASED) }
+    var accuracyMode by remember { mutableStateOf(ScanAccuracyMode.STRICT) }
 
     var referencePhotoUri by remember { mutableStateOf<Uri?>(null) }
     var referenceBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -196,13 +202,62 @@ fun StartScreen(
     }
 
     fun proceedToScan() {
-        val y = birthdayYear.toIntOrNull() ?: 2024
+        val y = birthdayYear.toIntOrNull() ?: 2026
         val m = birthdayMonth.toIntOrNull() ?: 5
-        val d = birthdayDay.toIntOrNull() ?: 21
+        val d = birthdayDay.toIntOrNull() ?: 27
         val birthday = LocalDate.of(y, m, d)
         val todayMaxDday = DdayCalculator(birthday, selectedRule)
             .calculate(LocalDateTime.now()).dday
-        onStartScan(birthday, selectedRule, selectedRoi, todayMaxDday)
+        onStartScan(birthday, selectedRule, selectedRoi, todayMaxDday, accuracyMode)
+    }
+
+    val directPhotoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 150)
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            scope.launch {
+                val y = birthdayYear.toIntOrNull() ?: 2026
+                val m = birthdayMonth.toIntOrNull() ?: 5
+                val d = birthdayDay.toIntOrNull() ?: 27
+                val birthday = LocalDate.of(y, m, d)
+                val ddayCalc = DdayCalculator(birthday = birthday, rule = selectedRule)
+                val directEntries = mutableListOf<CalendarPhotoEntry>()
+
+                withContext(Dispatchers.IO) {
+                    for ((idx, uri) in uris.withIndex()) {
+                        val dateTaken = try {
+                            context.contentResolver.openInputStream(uri)?.use { stream ->
+                                val exif = androidx.exifinterface.media.ExifInterface(stream)
+                                val dateStr = exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_DATETIME_ORIGINAL)
+                                    ?: exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_DATETIME)
+                                if (dateStr != null) {
+                                    val parts = dateStr.split(" ")[0].split(":")
+                                    LocalDate.of(parts[0].toInt(), parts[1].toInt(), parts[2].toInt())
+                                } else null
+                            }
+                        } catch (_: Exception) { null } ?: birthday.plusDays(idx.toLong())
+
+                        val calcResult = ddayCalc.calculate(dateTaken.atStartOfDay())
+                        directEntries.add(
+                            CalendarPhotoEntry(
+                                id = uri.toString(),
+                                effectiveDate = calcResult.effectiveDate,
+                                exifDday = calcResult.dday,
+                                ocrDday = calcResult.dday,
+                                resolvedDday = calcResult.dday,
+                                sharpnessScore = 100.0,
+                                photoUri = uri.toString(),
+                                isCalendarConfirmed = true
+                            )
+                        )
+                    }
+                }
+
+                if (directEntries.isNotEmpty()) {
+                    onDirectPhotosSelected(directEntries)
+                }
+            }
+        }
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -769,25 +824,90 @@ fun StartScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // 스캔 시작 CTA
-                Button(
-                    onClick = {
-                        val permissionStatus = ContextCompat.checkSelfPermission(context, requiredPermission)
-                        if (permissionStatus == PackageManager.PERMISSION_GRANTED) {
-                            proceedToScan()
-                        } else {
-                            permissionLauncher.launch(requiredPermission)
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
-                    shape = RoundedCornerShape(16.dp)
+                // ==========================================
+                // AI 탐색 정확도 모드 선택기
+                // ==========================================
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = Color.White)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("내 사진에서 달력 사진 찾기 시작 →", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("AI 탐색 정확도 설정", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = accuracyMode == ScanAccuracyMode.STRICT,
+                                onClick = { accuracyMode = ScanAccuracyMode.STRICT },
+                                label = { Text("🎯 엄격 모드") },
+                                modifier = Modifier.weight(1f)
+                            )
+                            FilterChip(
+                                selected = accuracyMode == ScanAccuracyMode.RELAXED,
+                                onClick = { accuracyMode = ScanAccuracyMode.RELAXED },
+                                label = { Text("📸 관대 모드") },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        Text(
+                            text = if (accuracyMode == ScanAccuracyMode.STRICT)
+                                "D-day 달력 숫자가 확실한 사진만 모아요 (음식/풍경 등 엉뚱한 사진 차단)"
+                            else
+                                "달력이 없는 날은 당일 찍힌 예쁜 아기 사진으로 영상 공백을 채워요",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 2트랙 진입 액션 버튼
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            directPhotoPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(56.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFE06D53))
+                    ) {
+                        Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color(0xFFE06D53))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("🖼️ 직접 고르기", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE06D53))
+                    }
+
+                    Button(
+                        onClick = {
+                            val permissionStatus = ContextCompat.checkSelfPermission(context, requiredPermission)
+                            if (permissionStatus == PackageManager.PERMISSION_GRANTED) {
+                                proceedToScan()
+                            } else {
+                                permissionLauncher.launch(requiredPermission)
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(56.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = Color.White)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("✨ AI 자동 찾기", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
                 }
             }
         }

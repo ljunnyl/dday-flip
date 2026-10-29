@@ -5,6 +5,8 @@ import kotlin.math.abs
 
 /**
  * D-day 달력 사진 엔트리.
+ *
+ * @param isCalendarConfirmed OCR 또는 템플릿 검증을 통해 달력 객체가 확인된 사진인지 여부
  */
 data class CalendarPhotoEntry(
     val id: String,
@@ -13,7 +15,8 @@ data class CalendarPhotoEntry(
     val ocrDday: Int? = null,
     val resolvedDday: Int = ocrDday ?: exifDday,
     val sharpnessScore: Double = 0.0,
-    val photoUri: String = ""
+    val photoUri: String = "",
+    val isCalendarConfirmed: Boolean = (ocrDday != null)
 )
 
 enum class IssueType {
@@ -93,7 +96,7 @@ class CalendarSequenceValidator {
         // 1. OCR 노이즈 정제: ocrDday가 존재하나 exifDday와 편차가 3일 초과인 경우 잡숫자로 간주하여 EXIF 일수로 대체
         val sanitizedEntries = entries.map { entry ->
             if (entry.ocrDday != null && abs(entry.ocrDday - entry.exifDday) > 3) {
-                entry.copy(ocrDday = null, resolvedDday = entry.exifDday)
+                entry.copy(ocrDday = null, resolvedDday = entry.exifDday, isCalendarConfirmed = false)
             } else {
                 entry
             }
@@ -177,14 +180,33 @@ class CalendarSequenceValidator {
     }
 
     /**
-     * 동일 날짜(D-day)에 여러 장의 사진이 있는 경우,
-     * 선명도(sharpnessScore)가 가장 높은 1장만 기본 선별하여 중복 투입을 방지.
+     * 동일 날짜(D-day)에 여러 장의 사진이 있는 경우:
+     * 1순위: 달력이 확인된 사진(isCalendarConfirmed == true) 최우선 선별
+     * 2순위: 선명도(sharpnessScore) 최고점 선별
      */
     fun selectBestPhotoPerDay(entries: List<CalendarPhotoEntry>): List<CalendarPhotoEntry> {
         return entries.groupBy { it.resolvedDday }
             .map { (_, photosOfDay) ->
-                photosOfDay.maxByOrNull { it.sharpnessScore } ?: photosOfDay.first()
+                photosOfDay.maxWithOrNull(
+                    compareBy<CalendarPhotoEntry> { if (it.isCalendarConfirmed) 1 else 0 }
+                        .thenBy { it.sharpnessScore }
+                ) ?: photosOfDay.first()
             }
             .sortedBy { it.resolvedDday }
+    }
+
+    /**
+     * AI 탐색 정확도 모드에 따라 후보 엔트리 필터링
+     * - STRICT: 달력이 명시적으로 확인된 사진만 남김 (비달력 일상 사진 완전 배제)
+     * - RELAXED: 모든 후보 사진 보존
+     */
+    fun filterByAccuracyMode(
+        entries: List<CalendarPhotoEntry>,
+        mode: ScanAccuracyMode
+    ): List<CalendarPhotoEntry> {
+        return when (mode) {
+            ScanAccuracyMode.STRICT -> entries.filter { it.isCalendarConfirmed }
+            ScanAccuracyMode.RELAXED -> entries
+        }
     }
 }

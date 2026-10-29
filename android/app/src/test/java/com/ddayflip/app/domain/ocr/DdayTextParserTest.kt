@@ -1,6 +1,7 @@
 package com.ddayflip.app.domain.ocr
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -17,26 +18,31 @@ class DdayTextParserTest {
         assertNotNull(r1)
         assertEquals(143, r1?.dday)
         assertTrue((r1?.confidence ?: 0f) >= 0.9f)
+        assertTrue(r1?.isExplicit == true)
 
         // D+ 150
         val r2 = parser.parse("D+ 150")
         assertNotNull(r2)
         assertEquals(150, r2?.dday)
+        assertTrue(r2?.isExplicit == true)
 
         // D-5
         val r3 = parser.parse("D-5")
         assertNotNull(r3)
         assertEquals(5, r3?.dday)
+        assertTrue(r3?.isExplicit == true)
 
         // 145일
         val r4 = parser.parse("145일")
         assertNotNull(r4)
         assertEquals(145, r4?.dday)
+        assertTrue(r4?.isExplicit == true)
 
         // D 99
         val r5 = parser.parse("D 99")
         assertNotNull(r5)
         assertEquals(99, r5?.dday)
+        assertTrue(r5?.isExplicit == true)
     }
 
     @Test
@@ -74,6 +80,7 @@ class DdayTextParserTest {
         val result = parser.parse(text, expectedDay = 100)
         assertNotNull(result)
         assertEquals(105, result?.dday)
+        assertFalse(result?.isExplicit == true)
     }
 
     @Test
@@ -83,6 +90,7 @@ class DdayTextParserTest {
         val result = parser.parse(text, expectedDay = 100)
         assertNotNull(result)
         assertEquals(150, result?.dday)
+        assertTrue(result?.isExplicit == true)
     }
 
     @Test
@@ -101,6 +109,7 @@ class DdayTextParserTest {
         assertNotNull(r)
         assertEquals(155, r?.dday)
         assertTrue((r?.confidence ?: 0f) >= 0.95f)
+        assertTrue(r?.isExplicit == true)
     }
 
     @Test
@@ -109,5 +118,6 @@ class DdayTextParserTest {
         val r = parser.parse(blocks)
         assertNotNull(r)
         assertEquals(155, r?.dday)
+        assertTrue(r?.isExplicit == true)
     }
 }

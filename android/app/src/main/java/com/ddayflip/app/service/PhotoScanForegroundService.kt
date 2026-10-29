@@ -5,48 +5,45 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
-import android.util.Log
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.ddayflip.app.MainActivity
+import com.ddayflip.app.R
 import com.ddayflip.app.core.domain.CalendarPhotoEntry
 import com.ddayflip.app.core.domain.CalendarRoi
 import com.ddayflip.app.core.domain.CalendarSequenceValidator
 import com.ddayflip.app.core.domain.DdayCalculator
 import com.ddayflip.app.core.domain.DdayStartRule
+import com.ddayflip.app.core.domain.ImageSharpnessEvaluator
+import com.ddayflip.app.core.domain.ScanAccuracyMode
 import com.ddayflip.app.data.MediaStorePhotoRepository
+import com.ddayflip.app.domain.ocr.DdayScanner
 import com.ddayflip.app.domain.ocr.MlKitDdayScanner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.time.Instant
 import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.ZoneId
 import kotlin.math.abs
 
 /**
- * 갤러리 사진의 EXIF 및 OCR D-day 분석을 백그라운드에서 끊김 없이 수행하는 포그라운드 서비스
+ * 갤러리 사진의 D-day 달력 인식 및 OCR 처리를 백그라운드에서 안전하게 수행하는 포그라운드 서비스.
+ * 앱이 백그라운드로 전환되거나 화면이 꺼져도 OS에 의해 강제 종료되지 않고 끝까지 분석을 완료합니다.
  */
 class PhotoScanForegroundService : Service() {
 
-    private val serviceJob = Job()
-    private val serviceScope = CoroutineScope(Dispatchers.Default + serviceJob)
+    private val serviceScope = CoroutineScope(Dispatchers.Default + Job())
     private var scanJob: Job? = null
 
     private val notificationManager by lazy {
@@ -78,6 +75,13 @@ class PhotoScanForegroundService : Service() {
         val endDateStr = intent.getStringExtra(EXTRA_END_DATE)
         val birthdayStr = intent.getStringExtra(EXTRA_BIRTHDAY)
         val ddayRuleStr = intent.getStringExtra(EXTRA_DDAY_RULE)
+        val accuracyModeStr = intent.getStringExtra(EXTRA_ACCURACY_MODE)
+        val accuracyMode = try {
+            if (accuracyModeStr != null) ScanAccuracyMode.valueOf(accuracyModeStr) else ScanAccuracyMode.STRICT
+        } catch (_: Exception) {
+            ScanAccuracyMode.STRICT
+        }
+
         val todayMaxDday = if (intent.hasExtra(EXTRA_TODAY_MAX_DDAY)) {
             intent.getIntExtra(EXTRA_TODAY_MAX_DDAY, 150)
         } else {
@@ -108,112 +112,132 @@ class PhotoScanForegroundService : Service() {
         val ddayRule = DdayStartRule.valueOf(ddayRuleStr)
 
         startForegroundNotification()
-
-        scanJob?.cancel()
-        scanJob = serviceScope.launch {
-            runScan(
-                startDate = startDate,
-                endDate = endDate,
-                birthday = birthday,
-                ddayRule = ddayRule,
-                calendarRoi = calendarRoi,
-                todayMaxDday = todayMaxDday
-            )
-        }
+        startScanningJob(startDate, endDate, birthday, ddayRule, todayMaxDday, calendarRoi, accuracyMode)
 
         return START_NOT_STICKY
     }
 
     private fun startForegroundNotification() {
-        val notification = buildProgressNotification(
-            processed = 0,
-            total = 0,
-            statusText = "사진 목록 불러오는 중..."
-        )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID_PROGRESS,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            )
-        } else {
-            startForeground(NOTIFICATION_ID_PROGRESS, notification)
-        }
+        val notification = buildProgressNotification(0, 0, "아기 사진 목록을 불러오는 중...")
+        startForeground(NOTIFICATION_ID_PROGRESS, notification)
     }
 
-    private suspend fun runScan(
+    private fun startScanningJob(
         startDate: LocalDate,
         endDate: LocalDate,
         birthday: LocalDate,
         ddayRule: DdayStartRule,
+        todayMaxDday: Int?,
         calendarRoi: CalendarRoi?,
-        todayMaxDday: Int?
+        accuracyMode: ScanAccuracyMode
     ) {
-        val repository = MediaStorePhotoRepository(applicationContext)
-        val scanner = MlKitDdayScanner()
-        val ddayCalculator = DdayCalculator(birthday = birthday, rule = ddayRule)
+        scanJob?.cancel()
+        scanJob = serviceScope.launch {
+            runPhotoScan(startDate, endDate, birthday, ddayRule, todayMaxDday, calendarRoi, accuracyMode)
+        }
+    }
 
+    private suspend fun runPhotoScan(
+        startDate: LocalDate,
+        endDate: LocalDate,
+        birthday: LocalDate,
+        ddayRule: DdayStartRule,
+        todayMaxDday: Int?,
+        calendarRoi: CalendarRoi?,
+        accuracyMode: ScanAccuracyMode
+    ) {
+        val scanner: DdayScanner = MlKitDdayScanner()
+        val sharpnessEvaluator = ImageSharpnessEvaluator()
         try {
             _scanState.value = ScanServiceState.Scanning(
                 processed = 0,
                 total = 0,
                 detectedCount = 0,
-                currentDday = null,
-                currentStatusText = "갤러리 사진 목록을 불러오는 중..."
+                currentDday = 0,
+                currentStatusText = "갤러리 사진 탐색을 시작합니다..."
             )
 
-            val photos = withContext(Dispatchers.IO) {
-                repository.getPhotosBetween(startDate, endDate)
-            }
-            Log.d("DdayScanner", "MediaStore queried between $startDate and $endDate: found ${photos.size} photos")
+            // 1. 미디어스토어에서 대상 기간 사진 조회
+            val repository = MediaStorePhotoRepository(applicationContext)
+            val photos = repository.getPhotosBetween(startDate, endDate)
             val total = photos.size
 
             if (total == 0) {
-                val validator = CalendarSequenceValidator()
-                val emptyResult = validator.validateSequence(emptyList(), todayMaxDday = todayMaxDday)
-                _scanState.value = ScanServiceState.Completed(emptyResult)
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                _scanState.value = ScanServiceState.Completed(
+                    com.ddayflip.app.core.domain.SequenceValidationResult(
+                        emptyList(),
+                        emptyList(),
+                        emptyList()
+                    )
+                )
+                showCompletionNotification(0, 0)
                 return
             }
 
+            val ddayCalculator = DdayCalculator(birthday = birthday, rule = ddayRule)
             val entries = mutableListOf<CalendarPhotoEntry>()
+            var processed = 0
             var detectedCalendarPhotos = 0
 
-            for ((index, photo) in photos.withIndex()) {
-                if (!currentCoroutineContext().isActive) break
+            // 2. 사진별 온디바이스 OCR 분석
+            for (photo in photos) {
+                processed++
 
-                val processed = index + 1
-
-                // 1. 촬영 시간 기반 EXIF D-day 계산 (00~04시 심야 보정 포함)
-                val photoDateTime = LocalDateTime.ofInstant(
-                    Instant.ofEpochMilli(photo.dateTakenMs),
-                    ZoneId.systemDefault()
+                val calcResult = ddayCalculator.calculate(
+                    dateTime = photo.dateTakenLocalDate.atStartOfDay()
                 )
-                val calcResult = ddayCalculator.calculate(photoDateTime)
                 val expectedDday = calcResult.dday
 
-                var currentStatus = "사진 분석 중 ($processed/$total): EXIF D+$expectedDday"
+                var currentStatus = "D+$expectedDday 사진 분석 중..."
 
-                // 2. 비트맵 디코딩 및 온디바이스 OCR 스캔 (ROI 전달)
-                val bitmap = withContext(Dispatchers.IO) {
+                val bitmap = kotlinx.coroutines.withContext(Dispatchers.IO) {
                     com.ddayflip.app.util.BitmapUtils.loadOrientedBitmap(applicationContext, photo.contentUri, 1200)
                 }
 
                 var detectedDday: Int? = null
+                var sharpness = 0.0
+
                 if (bitmap != null) {
+                    // 선명도 계산 (160x160 그레이스케일 라플라시안 분산)
+                    try {
+                        val smallW = 160
+                        val smallH = 160
+                        val smallBmp = Bitmap.createScaledBitmap(bitmap, smallW, smallH, false)
+                        val pixels = IntArray(smallW * smallH)
+                        smallBmp.getPixels(pixels, 0, smallW, 0, 0, smallW, smallH)
+                        val grayPixels = IntArray(smallW * smallH)
+                        for (i in pixels.indices) {
+                            val c = pixels[i]
+                            val r = (c shr 16) and 0xFF
+                            val g = (c shr 8) and 0xFF
+                            val b = c and 0xFF
+                            grayPixels[i] = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
+                        }
+                        if (smallBmp != bitmap) smallBmp.recycle()
+                        sharpness = sharpnessEvaluator.calculateLaplacianVariance(grayPixels, smallW, smallH)
+                    } catch (_: Exception) {}
+
                     val ocrResult = scanner.scanDday(bitmap, expectedDay = expectedDday, roi = calendarRoi)
                     if (ocrResult != null) {
                         val rawDday = ocrResult.dday
-                        Log.d("DdayScanner", "Photo #${photo.id}: OCR found D+$rawDday (expected: $expectedDday, conf: ${ocrResult.confidence})")
-                        // 유효 D-day 인정: 예상일 기준 ±5일 이내이거나, 합리적 아기 디데이 범위(1~500일)인 경우 인정
-                        if (abs(rawDday - expectedDday) <= 5 || rawDday in 1..500) {
+                        Log.d("DdayScanner", "Photo #${photo.id}: OCR found D+$rawDday (explicit: ${ocrResult.isExplicit}, expected: $expectedDday, conf: ${ocrResult.confidence})")
+
+                        // 유효 D-day 인정 로직:
+                        // 명시적 달력 포맷("D+150", "150일")은 7일 이내 오차 허용.
+                        // 단독 숫자는 의류/장난감 오인식 방지를 위해 예상일과 2일 이내 일치할 때만 D-day로 인정.
+                        val isValidDday = if (ocrResult.isExplicit) {
+                            abs(rawDday - expectedDday) <= 7 || (accuracyMode == ScanAccuracyMode.RELAXED && rawDday in 1..500)
+                        } else {
+                            abs(rawDday - expectedDday) <= 2
+                        }
+
+                        if (isValidDday) {
                             detectedDday = rawDday
                             detectedCalendarPhotos++
                             currentStatus = "D+$detectedDday 감지됨 ✨ (신뢰도 ${(ocrResult.confidence * 100).toInt()}%)"
                         } else {
                             Log.w("DdayScanner", "Photo #${photo.id}: D+$rawDday rejected as noise (expected $expectedDday)")
-                            currentStatus = "D+$expectedDday 추정 (OCR 노이즈 대체)"
+                            currentStatus = "D+$expectedDday 사진 분석 중 (노이즈 배제)"
                         }
                     } else {
                         Log.d("DdayScanner", "Photo #${photo.id}: No D-day text detected in photo")
@@ -221,16 +245,26 @@ class PhotoScanForegroundService : Service() {
                     bitmap.recycle()
                 }
 
-                entries.add(
-                    CalendarPhotoEntry(
-                        id = photo.id.toString(),
-                        effectiveDate = calcResult.effectiveDate,
-                        exifDday = expectedDday,
-                        ocrDday = detectedDday,
-                        resolvedDday = detectedDday ?: expectedDday,
-                        photoUri = photo.contentUri.toString()
+                val isConfirmed = (detectedDday != null)
+                val shouldInclude = when (accuracyMode) {
+                    ScanAccuracyMode.STRICT -> isConfirmed
+                    ScanAccuracyMode.RELAXED -> true
+                }
+
+                if (shouldInclude) {
+                    entries.add(
+                        CalendarPhotoEntry(
+                            id = photo.id.toString(),
+                            effectiveDate = calcResult.effectiveDate,
+                            exifDday = expectedDday,
+                            ocrDday = detectedDday,
+                            resolvedDday = detectedDday ?: expectedDday,
+                            sharpnessScore = sharpness,
+                            photoUri = photo.contentUri.toString(),
+                            isCalendarConfirmed = isConfirmed
+                        )
                     )
-                )
+                }
 
                 _scanState.value = ScanServiceState.Scanning(
                     processed = processed,
@@ -246,11 +280,10 @@ class PhotoScanForegroundService : Service() {
                 )
             }
 
-            if (!currentCoroutineContext().isActive) return
-
             // 3. 전체 시퀀스 스마트 검증
             val validator = CalendarSequenceValidator()
-            val result = validator.validateSequence(entries, todayMaxDday = todayMaxDday)
+            val filteredEntries = validator.filterByAccuracyMode(entries, accuracyMode)
+            val result = validator.validateSequence(filteredEntries, todayMaxDday = todayMaxDday)
 
             _scanState.value = ScanServiceState.Completed(result)
             showCompletionNotification(total, detectedCalendarPhotos)
@@ -288,12 +321,11 @@ class PhotoScanForegroundService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("D-day 사진 분석 중")
             .setContentText(statusText)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(R.mipmap.ic_launcher)
             .setProgress(total, processed, total == 0)
-            .setOngoing(true)
             .setContentIntent(contentIntent)
+            .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 
@@ -308,12 +340,11 @@ class PhotoScanForegroundService : Service() {
         )
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("D-day 사진 분석 완료")
-            .setContentText("총 ${total}장 중 ${detected}장 D-day 달력 인식 완료")
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setContentTitle("D-day 사진 분석 완료 ✨")
+            .setContentText("총 ${total}장 중 ${detected}장의 달력 사진을 찾았습니다.")
+            .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(contentIntent)
             .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
 
         notificationManager.notify(NOTIFICATION_ID_COMPLETED, notification)
@@ -323,56 +354,53 @@ class PhotoScanForegroundService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                CHANNEL_NAME,
+                "D-day 사진 분석",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "D-day 사진 분석 진행률 알림"
+                description = "갤러리 사진에서 D-day 달력을 찾는 백그라운드 작업 알림"
+                setShowBadge(false)
             }
             notificationManager.createNotificationChannel(channel)
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        scanJob?.cancel()
-        serviceJob.cancel()
-    }
-
     companion object {
-        const val CHANNEL_ID = "dday_scan_channel"
-        const val CHANNEL_NAME = "D-day 사진 분석"
+        const val CHANNEL_ID = "channel_dday_scan"
         const val NOTIFICATION_ID_PROGRESS = 1001
         const val NOTIFICATION_ID_COMPLETED = 1002
 
-        private const val ACTION_CANCEL = "com.ddayflip.app.action.CANCEL_SCAN"
-        private const val EXTRA_START_DATE = "EXTRA_START_DATE"
-        private const val EXTRA_END_DATE = "EXTRA_END_DATE"
-        private const val EXTRA_BIRTHDAY = "EXTRA_BIRTHDAY"
-        private const val EXTRA_DDAY_RULE = "EXTRA_DDAY_RULE"
-        private const val EXTRA_TODAY_MAX_DDAY = "EXTRA_TODAY_MAX_DDAY"
-        private const val EXTRA_HAS_ROI = "EXTRA_HAS_ROI"
-        private const val EXTRA_ROI_X = "EXTRA_ROI_X"
-        private const val EXTRA_ROI_Y = "EXTRA_ROI_Y"
-        private const val EXTRA_ROI_W = "EXTRA_ROI_W"
-        private const val EXTRA_ROI_H = "EXTRA_ROI_H"
+        const val ACTION_CANCEL = "com.ddayflip.app.ACTION_CANCEL_SCAN"
+        const val EXTRA_START_DATE = "com.ddayflip.app.EXTRA_START_DATE"
+        const val EXTRA_END_DATE = "com.ddayflip.app.EXTRA_END_DATE"
+        const val EXTRA_BIRTHDAY = "com.ddayflip.app.EXTRA_BIRTHDAY"
+        const val EXTRA_DDAY_RULE = "com.ddayflip.app.EXTRA_DDAY_RULE"
+        const val EXTRA_TODAY_MAX_DDAY = "com.ddayflip.app.EXTRA_TODAY_MAX_DDAY"
+        const val EXTRA_ACCURACY_MODE = "com.ddayflip.app.EXTRA_ACCURACY_MODE"
+        const val EXTRA_HAS_ROI = "com.ddayflip.app.EXTRA_HAS_ROI"
+        const val EXTRA_ROI_X = "com.ddayflip.app.EXTRA_ROI_X"
+        const val EXTRA_ROI_Y = "com.ddayflip.app.EXTRA_ROI_Y"
+        const val EXTRA_ROI_W = "com.ddayflip.app.EXTRA_ROI_W"
+        const val EXTRA_ROI_H = "com.ddayflip.app.EXTRA_ROI_H"
 
         private val _scanState = MutableStateFlow<ScanServiceState>(ScanServiceState.Idle)
         val scanState: StateFlow<ScanServiceState> = _scanState.asStateFlow()
 
-        fun startService(
+        fun startScan(
             context: Context,
             startDate: LocalDate,
             endDate: LocalDate,
             birthday: LocalDate,
             ddayRule: DdayStartRule,
-            calendarRoi: CalendarRoi?,
-            todayMaxDday: Int?
+            todayMaxDday: Int? = null,
+            calendarRoi: CalendarRoi? = null,
+            accuracyMode: ScanAccuracyMode = ScanAccuracyMode.STRICT
         ) {
             val intent = Intent(context, PhotoScanForegroundService::class.java).apply {
                 putExtra(EXTRA_START_DATE, startDate.toString())
                 putExtra(EXTRA_END_DATE, endDate.toString())
                 putExtra(EXTRA_BIRTHDAY, birthday.toString())
                 putExtra(EXTRA_DDAY_RULE, ddayRule.name)
+                putExtra(EXTRA_ACCURACY_MODE, accuracyMode.name)
                 if (todayMaxDday != null) {
                     putExtra(EXTRA_TODAY_MAX_DDAY, todayMaxDday)
                 }
@@ -385,6 +413,28 @@ class PhotoScanForegroundService : Service() {
                 }
             }
             ContextCompat.startForegroundService(context, intent)
+        }
+
+        fun startService(
+            context: Context,
+            startDate: LocalDate,
+            endDate: LocalDate,
+            birthday: LocalDate,
+            ddayRule: DdayStartRule,
+            calendarRoi: CalendarRoi?,
+            todayMaxDday: Int?,
+            accuracyMode: ScanAccuracyMode = ScanAccuracyMode.STRICT
+        ) {
+            startScan(
+                context = context,
+                startDate = startDate,
+                endDate = endDate,
+                birthday = birthday,
+                ddayRule = ddayRule,
+                todayMaxDday = todayMaxDday,
+                calendarRoi = calendarRoi,
+                accuracyMode = accuracyMode
+            )
         }
 
         fun resetState() {

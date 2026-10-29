@@ -42,6 +42,7 @@ fun ScanScreen(
     ddayRule: DdayStartRule = DdayStartRule.ONE_BASED,
     calendarRoi: CalendarRoi? = null,
     todayMaxDday: Int? = null,
+    accuracyMode: com.ddayflip.app.core.domain.ScanAccuracyMode = com.ddayflip.app.core.domain.ScanAccuracyMode.STRICT,
     photoRepository: PhotoRepository? = null,
     ddayScanner: DdayScanner? = null,
     onCancelScan: () -> Unit = {},
@@ -79,7 +80,8 @@ fun ScanScreen(
                 birthday = birthday,
                 ddayRule = ddayRule,
                 calendarRoi = calendarRoi,
-                todayMaxDday = todayMaxDday
+                todayMaxDday = todayMaxDday,
+                accuracyMode = accuracyMode
             )
         }
     }

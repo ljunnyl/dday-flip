@@ -4,6 +4,7 @@ import com.ddayflip.app.core.domain.CalendarPhotoEntry
 import com.ddayflip.app.core.domain.CalendarRoi
 import com.ddayflip.app.core.domain.CalendarSequenceValidator
 import com.ddayflip.app.core.domain.IssueType
+import com.ddayflip.app.core.domain.ScanAccuracyMode
 import org.junit.Assert.*
 import org.junit.Test
 import java.time.LocalDate
@@ -172,5 +173,64 @@ class CalendarSequenceValidatorTest {
 
         assertEquals("p2_single", selected[1].id)
         assertEquals(11, selected[1].resolvedDday)
+    }
+
+    @Test
+    fun `test selectBestPhotoPerDay prioritizes calendar confirmed over sharper non calendar photo`() {
+        val entries = listOf(
+            CalendarPhotoEntry(
+                id = "p_baby_only",
+                effectiveDate = LocalDate.of(2024, 6, 1),
+                exifDday = 10,
+                ocrDday = null,
+                resolvedDday = 10,
+                sharpnessScore = 350.0,
+                isCalendarConfirmed = false
+            ),
+            CalendarPhotoEntry(
+                id = "p_calendar_verified",
+                effectiveDate = LocalDate.of(2024, 6, 1),
+                exifDday = 10,
+                ocrDday = 10,
+                resolvedDday = 10,
+                sharpnessScore = 140.0,
+                isCalendarConfirmed = true
+            )
+        )
+
+        val selected = validator.selectBestPhotoPerDay(entries)
+
+        assertEquals(1, selected.size)
+        assertEquals("p_calendar_verified", selected[0].id)
+        assertTrue(selected[0].isCalendarConfirmed)
+    }
+
+    @Test
+    fun `test filterByAccuracyMode strict drops unconfirmed while relaxed preserves them`() {
+        val entries = listOf(
+            CalendarPhotoEntry(
+                id = "confirmed",
+                effectiveDate = LocalDate.of(2024, 6, 1),
+                exifDday = 10,
+                ocrDday = 10,
+                resolvedDday = 10,
+                isCalendarConfirmed = true
+            ),
+            CalendarPhotoEntry(
+                id = "unconfirmed_daily",
+                effectiveDate = LocalDate.of(2024, 6, 2),
+                exifDday = 11,
+                ocrDday = null,
+                resolvedDday = 11,
+                isCalendarConfirmed = false
+            )
+        )
+
+        val strictList = validator.filterByAccuracyMode(entries, ScanAccuracyMode.STRICT)
+        assertEquals(1, strictList.size)
+        assertEquals("confirmed", strictList[0].id)
+
+        val relaxedList = validator.filterByAccuracyMode(entries, ScanAccuracyMode.RELAXED)
+        assertEquals(2, relaxedList.size)
     }
 }
