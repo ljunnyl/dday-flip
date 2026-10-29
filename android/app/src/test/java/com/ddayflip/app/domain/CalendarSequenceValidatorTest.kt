@@ -233,4 +233,42 @@ class CalendarSequenceValidatorTest {
         val relaxedList = validator.filterByAccuracyMode(entries, ScanAccuracyMode.RELAXED)
         assertEquals(2, relaxedList.size)
     }
+
+    @Test
+    fun `test filterByAccuracyMode high precision preserves confirmed or sharp candidates`() {
+        val entries = listOf(
+            CalendarPhotoEntry(
+                id = "confirmed",
+                effectiveDate = LocalDate.of(2024, 6, 1),
+                exifDday = 10,
+                ocrDday = 10,
+                resolvedDday = 10,
+                sharpnessScore = 50.0,
+                isCalendarConfirmed = true
+            ),
+            CalendarPhotoEntry(
+                id = "sharp_unconfirmed",
+                effectiveDate = LocalDate.of(2024, 6, 2),
+                exifDday = 11,
+                ocrDday = null,
+                resolvedDday = 11,
+                sharpnessScore = 120.0,
+                isCalendarConfirmed = false
+            ),
+            CalendarPhotoEntry(
+                id = "blurry_unconfirmed",
+                effectiveDate = LocalDate.of(2024, 6, 3),
+                exifDday = 12,
+                ocrDday = null,
+                resolvedDday = 12,
+                sharpnessScore = 30.0,
+                isCalendarConfirmed = false
+            )
+        )
+
+        val highPrecisionList = validator.filterByAccuracyMode(entries, ScanAccuracyMode.HIGH_PRECISION)
+        assertEquals(2, highPrecisionList.size)
+        assertTrue(highPrecisionList.any { it.id == "confirmed" })
+        assertTrue(highPrecisionList.any { it.id == "sharp_unconfirmed" })
+    }
 }

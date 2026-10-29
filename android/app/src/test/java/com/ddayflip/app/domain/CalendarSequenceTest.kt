@@ -108,4 +108,71 @@ class CalendarSequenceTest {
         assertTrue(result.issues.isEmpty())
         assertTrue(result.missingDays.isEmpty())
     }
+
+    @Test
+    fun `test CalendarPhotoEntry supports stickerEmoji and customSubtitle with null defaults`() {
+        val defaultEntry = CalendarPhotoEntry(
+            id = "p1",
+            effectiveDate = LocalDate.of(2024, 6, 1),
+            exifDday = 1
+        )
+        assertNull(defaultEntry.stickerEmoji)
+        assertNull(defaultEntry.customSubtitle)
+
+        val decoratedEntry = defaultEntry.copy(
+            stickerEmoji = "💖",
+            customSubtitle = "100일 축하해 💖"
+        )
+        assertEquals("💖", decoratedEntry.stickerEmoji)
+        assertEquals("100일 축하해 💖", decoratedEntry.customSubtitle)
+    }
+
+    @Test
+    fun `test distributeBurstPhotos assigns surplus burst photos to missing days in order`() {
+        val entries = listOf(
+            CalendarPhotoEntry(
+                id = "d10_best",
+                effectiveDate = LocalDate.of(2024, 6, 10),
+                exifDday = 10,
+                resolvedDday = 10,
+                sharpnessScore = 200.0,
+                isCalendarConfirmed = true
+            ),
+            CalendarPhotoEntry(
+                id = "d10_burst1",
+                effectiveDate = LocalDate.of(2024, 6, 10),
+                exifDday = 10,
+                resolvedDday = 10,
+                sharpnessScore = 150.0,
+                isCalendarConfirmed = false
+            ),
+            CalendarPhotoEntry(
+                id = "d10_burst2",
+                effectiveDate = LocalDate.of(2024, 6, 10),
+                exifDday = 10,
+                resolvedDday = 10,
+                sharpnessScore = 120.0,
+                isCalendarConfirmed = false
+            ),
+            CalendarPhotoEntry(
+                id = "d13_single",
+                effectiveDate = LocalDate.of(2024, 6, 13),
+                exifDday = 13,
+                resolvedDday = 13,
+                sharpnessScore = 180.0,
+                isCalendarConfirmed = true
+            )
+        )
+
+        val distributed = validator.distributeBurstPhotos(entries, missingDays = listOf(12, 11))
+        val resolvedDays = distributed.map { it.resolvedDday }.distinct().sorted()
+        assertEquals(listOf(10, 11, 12, 13), resolvedDays)
+
+        val d10 = distributed.first { it.id == "d10_best" }
+        val d11 = distributed.first { it.id == "d10_burst1" }
+        val d12 = distributed.first { it.id == "d10_burst2" }
+        assertEquals(10, d10.resolvedDday)
+        assertEquals(11, d11.resolvedDday)
+        assertEquals(12, d12.resolvedDday)
+    }
 }

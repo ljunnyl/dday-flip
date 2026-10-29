@@ -29,6 +29,7 @@ import com.ddayflip.app.ui.screens.ExportingScreen
 import com.ddayflip.app.ui.screens.ReviewScreen
 import com.ddayflip.app.ui.screens.ScanScreen
 import com.ddayflip.app.ui.screens.StartScreen
+import com.ddayflip.app.ui.theme.AppVisualTheme
 import com.ddayflip.app.ui.theme.DdayFlipTheme
 import java.io.File
 import java.time.LocalDate
@@ -63,7 +64,9 @@ class MainActivity : ComponentActivity() {
         syncScreenWithServiceState()
 
         setContent {
-            DdayFlipTheme {
+            var currentTheme by remember { mutableStateOf(AppVisualTheme.WARM_COTTON) }
+
+            DdayFlipTheme(visualTheme = currentTheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -110,6 +113,9 @@ class MainActivity : ComponentActivity() {
                         }
                         AppScreen.START -> {
                             StartScreen(
+                                currentTheme = currentTheme,
+                                onThemeChange = { currentTheme = it },
+                                recentVideoFile = exportedVideoFile,
                                 onStartScan = { birthday, rule, roi, maxDday, mode ->
                                     ddayRule = rule
                                     scanStartDate = birthday
@@ -153,6 +159,12 @@ class MainActivity : ComponentActivity() {
                             ReviewScreen(
                                 issues = result?.issues ?: emptyList(),
                                 entries = result?.validatedEntries ?: emptyList(),
+                                missingDays = result?.missingDays ?: emptyList(),
+                                onEntriesChanged = { updated ->
+                                    if (result != null) {
+                                        validationResult = result.copy(validatedEntries = updated)
+                                    }
+                                },
                                 onProceedToExport = { selectedList ->
                                     entriesToExport = selectedList
                                     currentScreen = AppScreen.EXPORTING
@@ -183,7 +195,6 @@ class MainActivity : ComponentActivity() {
                                 videoDurationSeconds = durationSeconds,
                                 totalFrames = totalFrames,
                                 onRestart = {
-                                    exportedVideoFile = null
                                     validationResult = null
                                     entriesToExport = emptyList()
                                     PhotoScanForegroundService.resetState()

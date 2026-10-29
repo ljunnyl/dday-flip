@@ -2,13 +2,13 @@ package com.ddayflip.app.ui.screens
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -27,11 +27,12 @@ import com.ddayflip.app.domain.ocr.DdayScanner
 import com.ddayflip.app.domain.repository.PhotoRepository
 import com.ddayflip.app.service.PhotoScanForegroundService
 import com.ddayflip.app.service.ScanServiceState
+import com.ddayflip.app.ui.components.ThumbnailImage
 import kotlinx.coroutines.delay
 import java.time.LocalDate
 
 /**
- * 02. 온디바이스 OCR 백그라운드 포그라운드 서비스 연동 감성 스캔 & 실시간 잔여 시간 화면
+ * R03. 온디바이스 OCR 백그라운드 포그라운드 서비스 연동 라이브 뷰파인더 릴 & 실시간 잔여 시간 화면
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -142,6 +143,9 @@ fun ScanScreen(
             }
         }
 
+    val currentPhotoUri = (scanState as? ScanServiceState.Scanning)?.currentPhotoUri
+    val currentScanningDday = (scanState as? ScanServiceState.Scanning)?.currentDday
+
     val progress = if (totalPhotos > 0) {
         processedPhotos.toFloat() / totalPhotos.toFloat()
     } else if (isComplete) {
@@ -195,39 +199,84 @@ fun ScanScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
-                // 비주얼 원형 아이콘 영역
-                Box(
+                // R03. 폴라로이드 스타일 라이브 검사 뷰파인더 카드 (200.dp x 220.dp)
+                Card(
                     modifier = Modifier
-                        .size(140.dp)
-                        .clip(RoundedCornerShape(70.dp))
-                        .background(Color(0xFFFFF0ED)),
-                    contentAlignment = Alignment.Center
+                        .size(width = 200.dp, height = 220.dp)
+                        .border(2.dp, Color(0xFFE06D53).copy(alpha = 0.4f), RoundedCornerShape(20.dp)),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
                 ) {
-                    when {
-                        isError -> {
-                            Icon(
-                                imageVector = Icons.Default.ErrorOutline,
-                                contentDescription = "Error",
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(64.dp)
-                            )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFFFFF0ED)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            when {
+                                isError -> {
+                                    Icon(
+                                        imageVector = Icons.Default.ErrorOutline,
+                                        contentDescription = "Error",
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(64.dp)
+                                    )
+                                }
+                                isComplete -> {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = "Complete",
+                                        tint = Color(0xFF2E7D32),
+                                        modifier = Modifier.size(64.dp)
+                                    )
+                                }
+                                !currentPhotoUri.isNullOrBlank() -> {
+                                    ThumbnailImage(
+                                        photoUri = currentPhotoUri,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                else -> {
+                                    Icon(
+                                        imageVector = Icons.Default.Favorite,
+                                        contentDescription = "Searching",
+                                        tint = Color(0xFFE06D53),
+                                        modifier = Modifier.size(56.dp)
+                                    )
+                                }
+                            }
                         }
-                        isComplete -> {
-                            Icon(
-                                imageVector = Icons.Default.CheckCircle,
-                                contentDescription = "Complete",
-                                tint = Color(0xFF2E7D32),
-                                modifier = Modifier.size(64.dp)
-                            )
-                        }
-                        else -> {
-                            Icon(
-                                imageVector = Icons.Default.Favorite,
-                                contentDescription = "Searching",
-                                tint = Color(0xFFE06D53),
-                                modifier = Modifier.size(64.dp)
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // 하단 D+N 탐색 중 캡슐 배지 오버레이
+                        Surface(
+                            color = Color(0xFFE06D53),
+                            shape = RoundedCornerShape(50)
+                        ) {
+                            Text(
+                                text = when {
+                                    isComplete -> "탐색 완료 ✨"
+                                    isError -> "오류 확인"
+                                    currentScanningDday != null -> "D+$currentScanningDday 탐색 중"
+                                    else -> "갤러리 탐색 중"
+                                },
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                             )
                         }
                     }
@@ -245,7 +294,7 @@ fun ScanScreen(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = if (isError) (errorMessage ?: "오류 발생") else if (isComplete) "스마트 검수 화면으로 이동합니다" else "침대 위 D-day 달력을 꼼꼼히 탐색하고 있어요",
+                        text = if (isError) (errorMessage ?: "오류 발생") else if (isComplete) "스마트 검수 화면으로 이동합니다" else currentStatusText,
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -350,7 +399,8 @@ fun ScanScreen(
                             birthday = birthday,
                             ddayRule = ddayRule,
                             calendarRoi = calendarRoi,
-                            todayMaxDday = todayMaxDday
+                            todayMaxDday = todayMaxDday,
+                            accuracyMode = accuracyMode
                         )
                     },
                     modifier = Modifier

@@ -2,7 +2,6 @@ package com.ddayflip.app.domain.video
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -15,7 +14,7 @@ import com.ddayflip.app.core.domain.CalendarPhotoEntry
 object DdayVideoRenderer {
 
     /**
-     * 사진을 FIT_CENTER로 맞추고 하단에 D-day 뱃지를 오버레이 합성한 1080x1920 크기의 비트맵을 생성합니다.
+     * 사진을 FIT_CENTER로 맞추고 하단에 D-day 뱃지 및 커스텀 스티커/자막을 오버레이 합성한 1080x1920 비트맵을 생성합니다.
      */
     fun renderCompositeBitmap(
         context: Context,
@@ -53,6 +52,11 @@ object DdayVideoRenderer {
         // 3. 하단 D-day 뱃지 오버레이 합성
         drawDdayBadge(canvas, entry.resolvedDday, config)
 
+        // 4. 스티커 이모지 또는 커스텀 한 줄 자막이 있으면 뱃지 상단에 캡슐 배너 오버레이 합성
+        if (entry.stickerEmoji != null || !entry.customSubtitle.isNullOrBlank()) {
+            drawCustomOverlay(canvas, entry, config)
+        }
+
         return compositeBitmap
     }
 
@@ -63,7 +67,7 @@ object DdayVideoRenderer {
         canvas: Canvas,
         dday: Int,
         config: VideoExportConfig
-    ) {
+    ): BadgeRect {
         val labelText = "D+$dday"
 
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -90,18 +94,93 @@ object DdayVideoRenderer {
 
         // 텍스트 그리기
         canvas.drawText(labelText, badge.textX, badge.textY, textPaint)
+        return badge
+    }
+
+    /**
+     * D-day 뱃지 상단에 반투명 다크 캡슐 배너 + 스티커 이모지 및 커스텀 자막을 깔끔하게 렌더링합니다.
+     */
+    fun drawCustomOverlay(
+        canvas: Canvas,
+        entry: CalendarPhotoEntry,
+        config: VideoExportConfig
+    ) {
+        val overlayText = buildString {
+            if (!entry.stickerEmoji.isNullOrBlank()) {
+                append(entry.stickerEmoji)
+            }
+            if (!entry.customSubtitle.isNullOrBlank()) {
+                if (isNotEmpty()) append(" ")
+                append(entry.customSubtitle.trim())
+            }
+        }
+        if (overlayText.isBlank()) return
+
+        // 하단 D-day 뱃지 기준 좌표 산출
+        val ddayLabel = "D+${entry.resolvedDday}"
+        val badgeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = config.height * config.badgeTextSizeRatio
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        val ddayBounds = Rect()
+        badgeTextPaint.getTextBounds(ddayLabel, 0, ddayLabel.length, ddayBounds)
+        val badgeRect = config.calculateBadgeRect(
+            textWidth = ddayBounds.width().toFloat(),
+            textHeight = ddayBounds.height().toFloat()
+        )
+
+        val subTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = config.height * (config.badgeTextSizeRatio * 0.85f)
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textAlign = Paint.Align.CENTER
+        }
+        val subBounds = Rect()
+        subTextPaint.getTextBounds(overlayText, 0, overlayText.length, subBounds)
+        val subWidth = subTextPaint.measureText(overlayText).coerceAtLeast(subBounds.width().toFloat())
+        val subHeight = subBounds.height().toFloat().coerceAtLeast(subTextPaint.textSize * 0.8f)
+
+        val subtitleRect = config.calculateSubtitleRect(
+            textWidth = subWidth,
+            textHeight = subHeight,
+            badgeRect = badgeRect
+        )
+
+        // 반투명 다크 캡슐 배너 배경
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xB314181B.toInt()
+            style = Paint.Style.FILL
+        }
+        val rectF = RectF(subtitleRect.left, subtitleRect.top, subtitleRect.right, subtitleRect.bottom)
+        canvas.drawRoundRect(rectF, subtitleRect.cornerRadius, subtitleRect.cornerRadius, bgPaint)
+
+        // 캡슐 테두리 포인트
+        val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0x66E06D53
+            style = Paint.Style.STROKE
+            strokeWidth = 2.5f
+        }
+        canvas.drawRoundRect(rectF, subtitleRect.cornerRadius, subtitleRect.cornerRadius, strokePaint)
+
+        canvas.drawText(overlayText, subtitleRect.textX, subtitleRect.textY, subTextPaint)
     }
 
     /**
      * ARGB_8888 비트맵을 H.264 인코더가 직접 처리할 수 있는 NV12 (YUV420SemiPlanar) 바이트 배열로 변환합니다.
+     * reusableArgbBuffer를 전달받아 매 프레임 IntArray 신규 할당(22.4GB GC 폭발)을 원천 차단합니다.
      */
     fun convertBitmapToNv12(
         bitmap: Bitmap,
         width: Int,
         height: Int,
-        outBytes: ByteArray
+        outBytes: ByteArray,
+        reusableArgbBuffer: IntArray? = null
     ) {
-        val argb = IntArray(width * height)
+        val argb = if (reusableArgbBuffer != null && reusableArgbBuffer.size >= width * height) {
+            reusableArgbBuffer
+        } else {
+            IntArray(width * height)
+        }
         bitmap.getPixels(argb, 0, width, 0, 0, width, height)
         val frameSize = width * height
         var yIndex = 0

@@ -7,6 +7,8 @@ import kotlin.math.abs
  * D-day 달력 사진 엔트리.
  *
  * @param isCalendarConfirmed OCR 또는 템플릿 검증을 통해 달력 객체가 확인된 사진인지 여부
+ * @param stickerEmoji 사진 위에 오버레이할 귀여운 육아 스티커 이모지 (선택)
+ * @param customSubtitle 사진 하단 배지 위에 오버레이할 한 줄 축하 자막 (선택)
  */
 data class CalendarPhotoEntry(
     val id: String,
@@ -16,7 +18,9 @@ data class CalendarPhotoEntry(
     val resolvedDday: Int = ocrDday ?: exifDday,
     val sharpnessScore: Double = 0.0,
     val photoUri: String = "",
-    val isCalendarConfirmed: Boolean = (ocrDday != null)
+    val isCalendarConfirmed: Boolean = (ocrDday != null),
+    val stickerEmoji: String? = null,
+    val customSubtitle: String? = null
 )
 
 enum class IssueType {
@@ -199,6 +203,7 @@ class CalendarSequenceValidator {
      * AI 탐색 정확도 모드에 따라 후보 엔트리 필터링
      * - STRICT: 달력이 명시적으로 확인된 사진만 남김 (비달력 일상 사진 완전 배제)
      * - RELAXED: 모든 후보 사진 보존
+     * - HIGH_PRECISION: 달력이 확인되었거나 선명도가 높은(>= 80.0) 후보 사진을 보존
      */
     fun filterByAccuracyMode(
         entries: List<CalendarPhotoEntry>,
@@ -207,6 +212,55 @@ class CalendarSequenceValidator {
         return when (mode) {
             ScanAccuracyMode.STRICT -> entries.filter { it.isCalendarConfirmed }
             ScanAccuracyMode.RELAXED -> entries
+            ScanAccuracyMode.HIGH_PRECISION -> entries.filter {
+                it.isCalendarConfirmed || it.ocrDday != null || it.sharpnessScore >= 80.0
+            }
         }
+    }
+
+    /**
+     * 몰아찍기 스마트 분배 (Idea 08):
+     * 동일 resolvedDday에 2장 이상 존재하는 잉여 사진(버스트 촬영본)을 찾아,
+     * 첫 번째 대표 사진은 원래 날짜에 남기고 나머지 잉여 사진들을 missingDays(오름차순)에 순서대로 재할당하여 빈 날짜를 채움.
+     */
+    fun distributeBurstPhotos(
+        entries: List<CalendarPhotoEntry>,
+        missingDays: List<Int>
+    ): List<CalendarPhotoEntry> {
+        if (entries.isEmpty() || missingDays.isEmpty()) return entries
+
+        val sortedMissing = missingDays.distinct().sorted()
+        var missingIndex = 0
+
+        // 날짜별로 대표 사진을 제외한 잉여 사진 ID -> 재할당할 D-day 매핑 생성
+        val reassignedMap = mutableMapOf<String, Int>()
+        val groupedByDay = entries.groupBy { it.resolvedDday }.toSortedMap()
+
+        for ((_, photosOfDay) in groupedByDay) {
+            if (photosOfDay.size > 1 && missingIndex < sortedMissing.size) {
+                // 대표 사진 1장(달력 확인 우선 -> 선명도 순, 동점이면 첫 번째) 선정
+                val sortedGroup = photosOfDay.sortedWith(
+                    compareByDescending<CalendarPhotoEntry> { if (it.isCalendarConfirmed) 1 else 0 }
+                        .thenByDescending { it.sharpnessScore }
+                )
+                val surplusPhotos = sortedGroup.drop(1)
+                for (surplus in surplusPhotos) {
+                    if (missingIndex >= sortedMissing.size) break
+                    reassignedMap[surplus.id] = sortedMissing[missingIndex]
+                    missingIndex++
+                }
+            }
+        }
+
+        if (reassignedMap.isEmpty()) return entries
+
+        return entries.map { entry ->
+            val targetMissingDay = reassignedMap[entry.id]
+            if (targetMissingDay != null) {
+                entry.copy(resolvedDday = targetMissingDay)
+            } else {
+                entry
+            }
+        }.sortedBy { it.resolvedDday }
     }
 }

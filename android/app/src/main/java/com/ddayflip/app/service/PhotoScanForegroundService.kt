@@ -178,6 +178,7 @@ class PhotoScanForegroundService : Service() {
             val entries = mutableListOf<CalendarPhotoEntry>()
             var processed = 0
             var detectedCalendarPhotos = 0
+            var lastNotifyTimeMs = 0L
 
             // 2. 사진별 온디바이스 OCR 분석
             for (photo in photos) {
@@ -217,18 +218,27 @@ class PhotoScanForegroundService : Service() {
                         sharpness = sharpnessEvaluator.calculateLaplacianVariance(grayPixels, smallW, smallH)
                     } catch (_: Exception) {}
 
-                    val ocrResult = scanner.scanDday(bitmap, expectedDay = expectedDday, roi = calendarRoi)
+                    // 1차 OCR 수행 (ROI 지정 시 ROI 우선 탐색)
+                    var ocrResult = scanner.scanDday(bitmap, expectedDay = expectedDday, roi = calendarRoi)
+
+                    // HIGH_PRECISION 모드에서 ROI 스캔 결과가 없으면 전체 이미지(roi = null)로 2차 폴백 OCR 수행
+                    if (accuracyMode == ScanAccuracyMode.HIGH_PRECISION && calendarRoi != null && ocrResult == null) {
+                        ocrResult = scanner.scanDday(bitmap, expectedDay = expectedDday, roi = null)
+                    }
+
                     if (ocrResult != null) {
                         val rawDday = ocrResult.dday
                         Log.d("DdayScanner", "Photo #${photo.id}: OCR found D+$rawDday (explicit: ${ocrResult.isExplicit}, expected: $expectedDday, conf: ${ocrResult.confidence})")
 
+                        val effectiveRelaxed = (accuracyMode == ScanAccuracyMode.RELAXED || accuracyMode == ScanAccuracyMode.HIGH_PRECISION)
                         // 유효 D-day 인정 로직:
                         // 명시적 달력 포맷("D+150", "150일")은 7일 이내 오차 허용.
-                        // 단독 숫자는 의류/장난감 오인식 방지를 위해 예상일과 2일 이내 일치할 때만 D-day로 인정.
+                        // 단독 숫자는 의류/장난감 오인식 방지를 위해 예상일과 2일(고정밀은 3일) 이내 일치할 때만 D-day로 인정.
                         val isValidDday = if (ocrResult.isExplicit) {
-                            abs(rawDday - expectedDday) <= 7 || (accuracyMode == ScanAccuracyMode.RELAXED && rawDday in 1..500)
+                            abs(rawDday - expectedDday) <= 7 || (effectiveRelaxed && rawDday in 1..500)
                         } else {
-                            abs(rawDday - expectedDday) <= 2
+                            val tolerance = if (accuracyMode == ScanAccuracyMode.HIGH_PRECISION) 3 else 2
+                            abs(rawDday - expectedDday) <= tolerance
                         }
 
                         if (isValidDday) {
@@ -249,6 +259,7 @@ class PhotoScanForegroundService : Service() {
                 val shouldInclude = when (accuracyMode) {
                     ScanAccuracyMode.STRICT -> isConfirmed
                     ScanAccuracyMode.RELAXED -> true
+                    ScanAccuracyMode.HIGH_PRECISION -> isConfirmed || sharpness >= 80.0
                 }
 
                 if (shouldInclude) {
@@ -271,13 +282,19 @@ class PhotoScanForegroundService : Service() {
                     total = total,
                     detectedCount = detectedCalendarPhotos,
                     currentDday = detectedDday ?: expectedDday,
-                    currentStatusText = currentStatus
+                    currentStatusText = currentStatus,
+                    currentPhotoUri = photo.contentUri.toString()
                 )
 
-                notificationManager.notify(
-                    NOTIFICATION_ID_PROGRESS,
-                    buildProgressNotification(processed, total, currentStatus)
-                )
+                // 알림 IPC 스로틀링: 500ms 이상 경과했거나 마지막 사진일 때만 호출하여 시스템 부하 방지
+                val now = System.currentTimeMillis()
+                if (now - lastNotifyTimeMs >= 500L || processed == total) {
+                    lastNotifyTimeMs = now
+                    notificationManager.notify(
+                        NOTIFICATION_ID_PROGRESS,
+                        buildProgressNotification(processed, total, currentStatus)
+                    )
+                }
             }
 
             // 3. 전체 시퀀스 스마트 검증

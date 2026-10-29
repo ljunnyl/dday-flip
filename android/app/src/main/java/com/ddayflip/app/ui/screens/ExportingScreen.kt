@@ -1,8 +1,8 @@
 package com.ddayflip.app.ui.screens
 
 import android.widget.Toast
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -21,26 +21,25 @@ import androidx.compose.ui.unit.sp
 import com.ddayflip.app.core.domain.CalendarPhotoEntry
 import com.ddayflip.app.domain.video.MediaCodecVideoExporter
 import com.ddayflip.app.domain.video.VideoExporter
+import com.ddayflip.app.ui.components.ThumbnailImage
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import java.io.File
 
 /**
  * R05. 영상 만드는 중 화면
- * - 필름 애니메이션 & 감성 롤링 카피
+ * - 실시간 필름 렌더링 릴 (인코딩 중인 이전/현재/다음 실제 사진 썸네일 노출)
  * - 실시간 잔여 시간 (ETA) & 프레임 진행률
  * - 백그라운드 지속 안내
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExportingScreen(
-    entries: List<CalendarPhotoEntry>,
+    entries: List<CalendarPhotoEntry> = emptyList(),
     videoExporter: VideoExporter = remember { MediaCodecVideoExporter() },
     onExportComplete: (File) -> Unit = {},
     onCancel: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
 
     var exportProgress by remember { mutableFloatStateOf(0f) }
     var currentFrameIndex by remember { mutableIntStateOf(0) }
@@ -132,11 +131,11 @@ fun ExportingScreen(
             ) {
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // 필름 릴 목업 뷰
+                // R05. 실시간 필름 렌더링 릴 뷰 (이전/현재/다음 실제 사진 표시)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(200.dp)
+                        .height(210.dp)
                         .clip(RoundedCornerShape(20.dp))
                         .background(Color(0xFF1F2421)),
                     contentAlignment = Alignment.Center
@@ -145,20 +144,35 @@ fun ExportingScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        // Film Reel strip preview
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            val activeDday = if (entries.isNotEmpty()) {
-                                entries[currentFrameIndex.coerceIn(0, entries.size - 1)].resolvedDday
-                            } else {
-                                100
-                            }
+                            val centerIdx = if (entries.isNotEmpty()) {
+                                currentFrameIndex.coerceIn(0, entries.size - 1)
+                            } else 0
 
-                            FilmFrameItem(ddayText = "D+${(activeDday - 1).coerceAtLeast(1)}", isCurrent = false)
-                            FilmFrameItem(ddayText = "D+$activeDday", isCurrent = true)
-                            FilmFrameItem(ddayText = "D+${activeDday + 1}", isCurrent = false)
+                            val prevEntry = entries.getOrNull(centerIdx - 1)
+                            val currEntry = entries.getOrNull(centerIdx)
+                            val nextEntry = entries.getOrNull(centerIdx + 1)
+
+                            val activeDday = currEntry?.resolvedDday ?: 100
+
+                            FilmFrameItem(
+                                ddayText = "D+${prevEntry?.resolvedDday ?: (activeDday - 1).coerceAtLeast(1)}",
+                                photoUri = prevEntry?.photoUri,
+                                isCurrent = false
+                            )
+                            FilmFrameItem(
+                                ddayText = "D+$activeDday",
+                                photoUri = currEntry?.photoUri,
+                                isCurrent = true
+                            )
+                            FilmFrameItem(
+                                ddayText = "D+${nextEntry?.resolvedDday ?: (activeDday + 1)}",
+                                photoUri = nextEntry?.photoUri,
+                                isCurrent = false
+                            )
                         }
 
                         Text(
@@ -300,32 +314,64 @@ fun ExportingScreen(
 }
 
 @Composable
-private fun FilmFrameItem(ddayText: String, isCurrent: Boolean) {
+private fun FilmFrameItem(
+    ddayText: String,
+    photoUri: String?,
+    isCurrent: Boolean
+) {
     Box(
         modifier = Modifier
-            .width(76.dp)
-            .height(105.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .width(if (isCurrent) 86.dp else 72.dp)
+            .height(if (isCurrent) 118.dp else 100.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .border(
+                width = if (isCurrent) 2.5.dp else 1.dp,
+                color = if (isCurrent) Color(0xFFE06D53) else Color.White.copy(alpha = 0.25f),
+                shape = RoundedCornerShape(10.dp)
+            )
             .background(if (isCurrent) Color(0xFFE06D53) else Color(0xFF333835)),
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Movie,
-                contentDescription = null,
-                tint = if (isCurrent) Color.White else Color.Gray,
-                modifier = Modifier.size(20.dp)
+        if (!photoUri.isNullOrBlank()) {
+            ThumbnailImage(
+                photoUri = photoUri,
+                modifier = Modifier.fillMaxSize()
             )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = ddayText,
-                color = if (isCurrent) Color.White else Color.LightGray,
-                fontSize = 13.sp,
-                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
-            )
+            // 하단 D-day 캡슐 오버레이
+            Surface(
+                color = if (isCurrent) Color(0xFFE06D53) else Color.Black.copy(alpha = 0.65f),
+                shape = RoundedCornerShape(50),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 6.dp)
+            ) {
+                Text(
+                    text = ddayText,
+                    color = Color.White,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+            }
+        } else {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Movie,
+                    contentDescription = null,
+                    tint = if (isCurrent) Color.White else Color.Gray,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = ddayText,
+                    color = if (isCurrent) Color.White else Color.LightGray,
+                    fontSize = 13.sp,
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
+                )
+            }
         }
     }
 }

@@ -254,3 +254,21 @@ fun ThumbnailImage(
         }
     }
 }
+
+/**
+ * 문자열 URI를 받는 ThumbnailImage 오버로드
+ */
+@Composable
+fun ThumbnailImage(
+    photoUri: String,
+    modifier: Modifier = Modifier
+) {
+    if (photoUri.isNotBlank()) {
+        ThumbnailImage(uri = Uri.parse(photoUri), modifier = modifier)
+    } else {
+        Box(
+            modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {}
+    }
+}

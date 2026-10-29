@@ -13,7 +13,8 @@ sealed interface ScanServiceState {
         val total: Int,
         val detectedCount: Int,
         val currentDday: Int?,
-        val currentStatusText: String
+        val currentStatusText: String,
+        val currentPhotoUri: String? = null
     ) : ScanServiceState {
         val percentage: Float
             get() = if (total > 0) processed.toFloat() / total.toFloat() else 0f

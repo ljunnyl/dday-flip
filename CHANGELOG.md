@@ -5,6 +5,23 @@
 ## [Unreleased]
 
 ### Added
+- **v3.5 피그마 6대 화면 UX 리뉴얼 & 온디바이스 인코딩/스캔 최적화 전면 구현**
+  - **테마 3종 & 야간 수유등 다크 모드 (`Theme.kt`, `MainActivity.kt`, `StartScreen.kt`)**:
+    - `AppVisualTheme` (`WARM_COTTON` ☁️ 웜 코튼, `MINIMAL_WHITE` 🤍 미니멀 화이트, `DARK_ROOM` 🌙 수유등 다크) 도입 및 홈 상단 원터치 전환 칩 제공
+  - **R01 최근 만든 영상 홈 플레이어 카드 (`StartScreen.kt`)**:
+    - `cacheDir` 내 최근 생성된 `dday_flip_*.mp4` 감지 시 첫 프레임 썸네일 추출, 앱 내 `VideoView` 다이얼로그 `[▶ 바로 재생]` 및 `[📤 공유하기]` 지원
+  - **고정밀 다중 패스 분석 모드 (`ScanAccuracyMode.HIGH_PRECISION`, `PhotoScanForegroundService.kt`)**:
+    - ROI 지정 스캔 실패 시 전체 이미지(`roi = null`)로 2차 폴백 OCR을 수행하여 우드블록/필기체 달력 인식률 극대화 및 알림 IPC 500ms 스로틀링 적용
+  - **R03 폴라로이드 라이브 검사 뷰파인더 릴 (`ScanScreen.kt`, `PhotoScanState.kt`)**:
+    - `ScanServiceState.Scanning`에 `currentPhotoUri`를 포함하여 스캔 중 현재 분석 사진을 `200.dp x 220.dp` 폴라로이드 카드와 `D+N 탐색 중` 캡슐 배지로 실시간 표시
+  - **R04 갤럭시 스타일 패스트 스크롤러 & 몰아찍기 스마트 분배 & 스티커/자막 꾸미기 (`ReviewScreen.kt`, `CalendarSequenceValidator.kt`, `VideoExportConfig.kt`, `DdayVideoRenderer.kt`)**:
+    - 우측 고정 버튼 기둥을 제거하고 스크롤/드래그 시 반응하는 슬림 스크롤 핸들 + 플로팅 날짜 말풍선(`D+N | YYYY-MM-DD`)으로 교체
+    - `distributeBurstPhotos` 구현 및 결측일 발생 시 몰아찍은 잉여 사진으로 빈 날짜를 채우는 원터치 액션 배너/버튼 제공
+    - 타임라인 카드별 `[✨ 꾸미기]` 다이얼로그(육아 스티커 8종 + 한 줄 축하 자막) 및 비디오 합성 시 D-day 뱃지 상단 반투명 캡슐 배너 오버레이(`calculateSubtitleRect`, `drawCustomOverlay`) 구현
+  - **R05 실시간 필름 렌더링 릴 & NV12 버퍼 재사용 (`ExportingScreen.kt`, `DdayVideoRenderer.kt`, `VideoExporter.kt`)**:
+    - 인코딩 중인 이전/현재/다음 실제 사진 썸네일을 상단 필름 릴 프레임에 실시간 표시하고, `convertBitmapToNv12`에서 `reusableArgbBuffer`를 재사용하여 매 프레임 `IntArray` 신규 할당(GC 폭증) 원천 차단
+  > 💡 **의도 (Why & How):** 야간 육아 환경의 눈부심을 방지하는 수유등 다크 모드와 라이브 뷰파인더/필름 릴로 대기 체감 시간을 줄이고, 몰아찍기 자동 분배 및 스티커·자막 오버레이, 인코더 메모리 재사용으로 감성 완성도와 런타임 안정성을 동시에 확보.
+
 - **R00 감성 스플래시 화면 및 스칸디나비안 우드 앱 아이콘 적용 (v3.0 Visuals)**
   - **스마트폰 앱 아이콘 리뉴얼**:
     - 북유럽 미니멀 자작나무 원목 플립 캘린더 디자인 적용 (`mipmap-*` 전 해상도 mdpi~xxxhdpi 및 Android 8.0+ Adaptive Icon 완비)

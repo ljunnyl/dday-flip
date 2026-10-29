@@ -97,6 +97,44 @@ data class VideoExportConfig(
     }
 
     /**
+     * 하단 D-day 뱃지(badgeRect) 바로 위에 커스텀 자막/스티커 캡슐 배너 영역 좌표를 계산합니다.
+     */
+    fun calculateSubtitleRect(
+        textWidth: Float,
+        textHeight: Float,
+        badgeRect: BadgeRect
+    ): BadgeRect {
+        val gap = 16f
+        val horizontalPadding = 32f
+        val verticalPadding = 16f
+
+        val centerX = (badgeRect.left + badgeRect.right) / 2f
+        val bannerWidth = textWidth + horizontalPadding * 2f
+        val bannerHeight = textHeight + verticalPadding * 2f
+
+        val left = centerX - bannerWidth / 2f
+        val right = centerX + bannerWidth / 2f
+        val bottom = badgeRect.top - gap
+        val top = bottom - bannerHeight
+        val cornerRadius = bannerHeight / 2f
+
+        val textX = centerX
+        val textY = top + (bannerHeight + textHeight) / 2f
+        val textSize = height * (badgeTextSizeRatio * 0.85f)
+
+        return BadgeRect(
+            left = left,
+            top = top,
+            right = right,
+            bottom = bottom,
+            cornerRadius = cornerRadius,
+            textX = textX,
+            textY = textY,
+            textSize = textSize
+        )
+    }
+
+    /**
      * 원본 이미지 크기(srcWidth, srcHeight)를 캔버스(width, height) 중앙에 비율 유지(FIT_CENTER)하여 배치할 좌표 계산
      */
     fun calculateFitCenter(srcWidth: Int, srcHeight: Int): FitCenterRect {

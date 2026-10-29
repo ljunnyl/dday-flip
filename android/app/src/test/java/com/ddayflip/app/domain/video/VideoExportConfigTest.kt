@@ -109,4 +109,32 @@ class VideoExportConfigTest {
         assertEquals(960f, fit.width, 0.1f)
         assertEquals(1920f, fit.height, 0.1f)
     }
+
+    @Test
+    fun `calculateSubtitleRect positions capsule banner centered directly above badgeRect`() {
+        val config = VideoExportConfig(width = 1080, height = 1920)
+        val badgeRect = config.calculateBadgeRect(textWidth = 120f, textHeight = 36f)
+        val subTextWidth = 240f
+        val subTextHeight = 32f
+
+        val subtitleRect = config.calculateSubtitleRect(
+            textWidth = subTextWidth,
+            textHeight = subTextHeight,
+            badgeRect = badgeRect
+        )
+
+        // Centered horizontally at same centerX as badgeRect (540f)
+        val badgeCenterX = (badgeRect.left + badgeRect.right) / 2f
+        assertEquals(badgeCenterX, (subtitleRect.left + subtitleRect.right) / 2f, 0.1f)
+        assertEquals(badgeCenterX, subtitleRect.textX, 0.1f)
+
+        // Positioned above badgeRect.top with gap = 16f
+        assertEquals(badgeRect.top - 16f, subtitleRect.bottom, 0.1f)
+
+        // Width includes horizontalPadding = 32f on each side (240 + 64 = 304)
+        assertEquals(subTextWidth + 64f, subtitleRect.right - subtitleRect.left, 0.1f)
+
+        // Height includes verticalPadding = 16f on top and bottom (32 + 32 = 64)
+        assertEquals(subTextHeight + 32f, subtitleRect.bottom - subtitleRect.top, 0.1f)
+    }
 }

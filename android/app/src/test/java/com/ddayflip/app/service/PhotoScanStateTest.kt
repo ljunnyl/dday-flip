@@ -76,4 +76,26 @@ class PhotoScanStateTest {
         PhotoScanForegroundService.resetState()
         assertTrue(PhotoScanForegroundService.scanState.value is ScanServiceState.Idle)
     }
+
+    @Test
+    fun scanningState_supportsCurrentPhotoUriWithNullDefault() {
+        val stateDefault = ScanServiceState.Scanning(
+            processed = 1,
+            total = 10,
+            detectedCount = 1,
+            currentDday = 1,
+            currentStatusText = "스캔 중"
+        )
+        assertEquals(null, stateDefault.currentPhotoUri)
+
+        val stateWithUri = ScanServiceState.Scanning(
+            processed = 2,
+            total = 10,
+            detectedCount = 2,
+            currentDday = 2,
+            currentStatusText = "스캔 중",
+            currentPhotoUri = "content://media/external/images/media/42"
+        )
+        assertEquals("content://media/external/images/media/42", stateWithUri.currentPhotoUri)
+    }
 }

@@ -2,12 +2,17 @@ package com.ddayflip.app.ui.screens
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import android.widget.MediaController
+import android.widget.Toast
+import android.widget.VideoView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -17,20 +22,19 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.filled.ZoomIn
-import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -48,28 +52,36 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.ddayflip.app.core.domain.CalendarPhotoEntry
 import com.ddayflip.app.core.domain.CalendarRoi
 import com.ddayflip.app.core.domain.DdayCalculator
 import com.ddayflip.app.core.domain.DdayStartRule
 import com.ddayflip.app.core.domain.ScanAccuracyMode
 import com.ddayflip.app.domain.ocr.DdayTextParser
+import com.ddayflip.app.ui.theme.AppVisualTheme
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.time.LocalDate
 import java.time.LocalDateTime
 
 /**
- * R01. 첫 화면 (홈 & 온보딩) + R02. 기준 등록 (실제 사진 OCR 자동 감지 & 탭하여 직접 지정)
+ * R01. 첫 화면 (홈 & 온보딩 + 최근 영상 플레이어 + 테마 3종) + R02. 기준 등록 (실제 사진 OCR 자동 감지 & 탭하여 직접 지정)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StartScreen(
+    currentTheme: AppVisualTheme = AppVisualTheme.WARM_COTTON,
+    onThemeChange: (AppVisualTheme) -> Unit = {},
+    recentVideoFile: File? = null,
     onStartScan: (
         birthday: LocalDate,
         rule: DdayStartRule,
@@ -96,6 +108,37 @@ fun StartScreen(
     var selectedRoi by remember { mutableStateOf<CalendarRoi?>(null) }
     var isDetectingRoi by remember { mutableStateOf(false) }
     var detectedLabel by remember { mutableStateOf<String?>(null) }
+
+    // R01 최근 만든 영상 탐색 (전달받은 파일 또는 cacheDir 내 가장 최근 dday_flip_*.mp4)
+    var latestVideoFile by remember(recentVideoFile) { mutableStateOf<File?>(recentVideoFile) }
+    var latestVideoThumbnail by remember { mutableStateOf<Bitmap?>(null) }
+    var showVideoPlayerDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(recentVideoFile, isConfigMode) {
+        withContext(Dispatchers.IO) {
+            val candidate = recentVideoFile?.takeIf { it.exists() && it.length() > 0L }
+                ?: context.cacheDir.listFiles { file ->
+                    file.isFile && file.name.startsWith("dday_flip_") && file.name.endsWith(".mp4") && file.length() > 0L
+                }?.maxByOrNull { it.lastModified() }
+
+            latestVideoFile = candidate
+            if (candidate != null) {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(candidate.absolutePath)
+                    latestVideoThumbnail = retriever.getFrameAtTime(0)
+                } catch (_: Exception) {
+                    latestVideoThumbnail = null
+                } finally {
+                    try {
+                        retriever.release()
+                    } catch (_: Exception) {}
+                }
+            } else {
+                latestVideoThumbnail = null
+            }
+        }
+    }
 
     // 비트맵 로드 및 실제 ML Kit 텍스트 감지 (달력 위치 자동 탐색)
     LaunchedEffect(referencePhotoUri) {
@@ -295,12 +338,14 @@ fun StartScreen(
     ) { padding ->
         if (!isConfigMode) {
             // ==========================================
-            // R01. 첫 화면 (홈 & 온보딩)
+            // R01. 첫 화면 (홈 & 온보딩 + 테마 3종 + 최근 영상 카드)
             // ==========================================
+            val homeScrollState = rememberScrollState()
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
+                    .verticalScroll(homeScrollState)
                     .padding(24.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -308,9 +353,133 @@ fun StartScreen(
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Spacer(modifier = Modifier.height(10.dp))
+                    // 상단 테마 3종 선택 칩 (☁️ 웜 코튼 / 🤍 미니멀 화이트 / 🌙 수유등 다크)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        AppVisualTheme.values().forEach { themeOption ->
+                            FilterChip(
+                                selected = currentTheme == themeOption,
+                                onClick = { onThemeChange(themeOption) },
+                                label = {
+                                    Text(
+                                        text = "${themeOption.emoji} ${themeOption.title}",
+                                        fontSize = 11.sp,
+                                        fontWeight = if (currentTheme == themeOption) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+
+                    // R01 최근 만든 영상 홈 플레이어 카드 (최근 비디오 파일이 존재할 때 노출)
+                    val recentVideo = latestVideoFile
+                    if (recentVideo != null && recentVideo.exists()) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            shape = RoundedCornerShape(18.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.5.dp, Color(0xFFE06D53), RoundedCornerShape(18.dp))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                // 첫 프레임 썸네일
+                                Box(
+                                    modifier = Modifier
+                                        .size(64.dp, 88.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Color(0xFF1F2421)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (latestVideoThumbnail != null) {
+                                        Image(
+                                            bitmap = latestVideoThumbnail!!.asImageBitmap(),
+                                            contentDescription = "최근 만든 영상 썸네일",
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    }
+                                    Surface(
+                                        color = Color.Black.copy(alpha = 0.55f),
+                                        shape = RoundedCornerShape(50)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.PlayArrow,
+                                            contentDescription = null,
+                                            tint = Color.White,
+                                            modifier = Modifier
+                                                .padding(6.dp)
+                                                .size(20.dp)
+                                        )
+                                    }
+                                }
+
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "🎬 최근 만든 D-day 릴스 영상",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = recentVideo.name,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Button(
+                                            onClick = { showVideoPlayerDialog = true },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.height(34.dp)
+                                        ) {
+                                            Text("▶ 바로 재생", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                        }
+                                        OutlinedButton(
+                                            onClick = {
+                                                try {
+                                                    val contentUri = FileProvider.getUriForFile(
+                                                        context,
+                                                        "${context.packageName}.fileprovider",
+                                                        recentVideo
+                                                    )
+                                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                                        type = "video/mp4"
+                                                        putExtra(Intent.EXTRA_STREAM, contentUri)
+                                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                    }
+                                                    context.startActivity(Intent.createChooser(shareIntent, "최근 디데이 릴스 공유하기"))
+                                                } catch (e: Exception) {
+                                                    Toast.makeText(context, "공유 실패: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                }
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.height(34.dp)
+                                        ) {
+                                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(14.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("📤 공유하기", fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     Card(
                         colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
@@ -390,11 +559,11 @@ fun StartScreen(
                     }
 
                     Card(
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF9F7F4)),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                         shape = RoundedCornerShape(18.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .border(1.dp, Color(0xFFE5E0D8), RoundedCornerShape(18.dp))
+                            .border(1.dp, MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(18.dp))
                     ) {
                         Row(
                             modifier = Modifier.padding(16.dp),
@@ -414,7 +583,8 @@ fun StartScreen(
                                 Text(
                                     text = "1일 1장 최고 선명도 자동 선별",
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp
+                                    fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
                                     text = "하루에 여러 장 찍어도 가장 또렷한 1장만 골라줘요",
@@ -425,6 +595,8 @@ fun StartScreen(
                         }
                     }
                 }
+
+                Spacer(modifier = Modifier.height(20.dp))
 
                 Button(
                     onClick = { isConfigMode = true },
@@ -522,7 +694,7 @@ fun StartScreen(
                 // 기준 D-day 달력 사진 등록 및 시각 검증
                 // ==========================================
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFBF9F6)),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     shape = RoundedCornerShape(20.dp),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -722,7 +894,7 @@ fun StartScreen(
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text("가로", fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(28.dp))
+                                        Text("가로", fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(28.dp), color = Color(0xFF3E2723))
                                         Slider(
                                             value = roiBoxWidthRatio,
                                             onValueChange = { newW ->
@@ -746,7 +918,7 @@ fun StartScreen(
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text("세로", fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(28.dp))
+                                        Text("세로", fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(28.dp), color = Color(0xFF3E2723))
                                         Slider(
                                             value = roiBoxHeightRatio,
                                             onValueChange = { newH ->
@@ -825,7 +997,7 @@ fun StartScreen(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 // ==========================================
-                // AI 탐색 정확도 모드 선택기
+                // AI 탐색 정확도 모드 선택기 (엄격 / 관대 / 고정밀)
                 // ==========================================
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
@@ -839,26 +1011,29 @@ fun StartScreen(
                         Text("AI 탐색 정확도 설정", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             FilterChip(
                                 selected = accuracyMode == ScanAccuracyMode.STRICT,
                                 onClick = { accuracyMode = ScanAccuracyMode.STRICT },
-                                label = { Text("🎯 엄격 모드") },
+                                label = { Text("🎯 엄격", fontSize = 11.sp) },
+                                modifier = Modifier.weight(1f)
+                            )
+                            FilterChip(
+                                selected = accuracyMode == ScanAccuracyMode.HIGH_PRECISION,
+                                onClick = { accuracyMode = ScanAccuracyMode.HIGH_PRECISION },
+                                label = { Text("🔍 고정밀", fontSize = 11.sp) },
                                 modifier = Modifier.weight(1f)
                             )
                             FilterChip(
                                 selected = accuracyMode == ScanAccuracyMode.RELAXED,
                                 onClick = { accuracyMode = ScanAccuracyMode.RELAXED },
-                                label = { Text("📸 관대 모드") },
+                                label = { Text("📸 관대", fontSize = 11.sp) },
                                 modifier = Modifier.weight(1f)
                             )
                         }
                         Text(
-                            text = if (accuracyMode == ScanAccuracyMode.STRICT)
-                                "D-day 달력 숫자가 확실한 사진만 모아요 (음식/풍경 등 엉뚱한 사진 차단)"
-                            else
-                                "달력이 없는 날은 당일 찍힌 예쁜 아기 사진으로 영상 공백을 채워요",
+                            text = accuracyMode.description,
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -907,6 +1082,65 @@ fun StartScreen(
                         Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = Color.White)
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("✨ AI 자동 찾기", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+                }
+            }
+        }
+    }
+
+    // 앱 내 VideoView 즉시 재생 다이얼로그
+    val videoToPlay = latestVideoFile
+    if (showVideoPlayerDialog && videoToPlay != null && videoToPlay.exists()) {
+        Dialog(onDismissRequest = { showVideoPlayerDialog = false }) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = Color(0xFF14181B),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "🎬 최근 만든 영상 재생",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp
+                        )
+                        IconButton(onClick = { showVideoPlayerDialog = false }) {
+                            Icon(Icons.Default.Close, contentDescription = "닫기", tint = Color.White)
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(9f / 16f)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color.Black),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AndroidView(
+                            factory = { ctx ->
+                                VideoView(ctx).apply {
+                                    setVideoPath(videoToPlay.absolutePath)
+                                    val mediaController = MediaController(ctx)
+                                    mediaController.setAnchorView(this)
+                                    setMediaController(mediaController)
+                                    setOnPreparedListener { mp ->
+                                        mp.isLooping = true
+                                        start()
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
                 }
             }

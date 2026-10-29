@@ -79,15 +79,23 @@ class MediaCodecVideoExporter : VideoExporter {
             val frameDurationUs = 1_000_000L / config.frameRate
             val nv12BufferSize = config.width * config.height * 3 / 2
             val nv12Buffer = ByteArray(nv12BufferSize)
+            // 매 프레임 IntArray 신규 할당으로 인한 GC 폭증을 막기 위해 1회 할당 후 재사용
+            val argbBuffer = IntArray(config.width * config.height)
 
             var currentFrameIndex = 0
             val bufferInfo = MediaCodec.BufferInfo()
 
             // 사진별 프레임 렌더링 & 인코딩 파이프라인
-            for ((photoIndex, entry) in entries.withIndex()) {
-                // 1. 해당 사진의 합성 프레임 생성 (FIT_CENTER + D-day 뱃지)
+            for ((_, entry) in entries.withIndex()) {
+                // 1. 해당 사진의 합성 프레임 생성 (FIT_CENTER + D-day 뱃지 + 스티커/자막)
                 val compositeBitmap = DdayVideoRenderer.renderCompositeBitmap(context, entry, config)
-                DdayVideoRenderer.convertBitmapToNv12(compositeBitmap, config.width, config.height, nv12Buffer)
+                DdayVideoRenderer.convertBitmapToNv12(
+                    compositeBitmap,
+                    config.width,
+                    config.height,
+                    nv12Buffer,
+                    argbBuffer
+                )
                 compositeBitmap.recycle()
 
                 // 2. 해당 사진에 할당된 프레임 수(기본 18프레임)만큼 인코더에 큐잉
