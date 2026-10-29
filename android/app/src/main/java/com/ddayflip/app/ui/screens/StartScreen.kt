@@ -15,7 +15,11 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -512,77 +516,199 @@ fun StartScreen(
                                 Text("기준 사진 고르기 (아기 침대/달력 사진)", color = Color(0xFFE06D53), fontWeight = FontWeight.Bold)
                             }
                         } else {
-                            // 사진 프리뷰 + 탭하여 위치 이동 지원
+                            // 사진 전체화면(원본 비율 전체 표시) + 드래그 이동 및 크기 조절
+                            var roiBoxWidthRatio by remember { mutableFloatStateOf(0.40f) }
+                            var roiBoxHeightRatio by remember { mutableFloatStateOf(0.18f) }
+
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(240.dp)
+                                    .height(340.dp)
                                     .clip(RoundedCornerShape(14.dp))
-                                    .background(Color(0xFF2B2E2C))
-                                    .pointerInput(referenceBitmap) {
-                                        detectTapGestures { offset ->
-                                            val tapXFrac = offset.x / size.width
-                                            val tapYFrac = offset.y / size.height
-                                            val boxW = 0.35f
-                                            val boxH = 0.25f
-                                            selectedRoi = CalendarRoi(
-                                                x = (tapXFrac - boxW / 2).coerceIn(0f, 1f - boxW),
-                                                y = (tapYFrac - boxH / 2).coerceIn(0f, 1f - boxH),
-                                                width = boxW,
-                                                height = boxH
-                                            )
-                                            detectedLabel = "달력 위치를 직접 지정했어요 🎯 (원하는 곳을 다시 탭 가능)"
-                                        }
-                                    },
+                                    .background(Color(0xFF1E201F)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 val bmp = referenceBitmap
                                 if (bmp != null) {
-                                    Image(
-                                        bitmap = bmp.asImageBitmap(),
-                                        contentDescription = "기준 사진 미리보기",
+                                    val bmpRatio = bmp.width.toFloat() / bmp.height.toFloat()
+                                    BoxWithConstraints(
                                         modifier = Modifier.fillMaxSize(),
-                                        contentScale = ContentScale.Crop
-                                    )
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        val containerW = maxWidth
+                                        val containerH = maxHeight
+                                        val containerRatio = containerW.value / containerH.value
 
-                                    val roi = selectedRoi
-                                    if (roi != null) {
-                                        Canvas(modifier = Modifier.fillMaxSize()) {
-                                            val w = size.width
-                                            val h = size.height
-
-                                            val left = roi.x * w
-                                            val top = roi.y * h
-                                            val boxW = roi.width * w
-                                            val boxH = roi.height * h
-
-                                            // 달력 감지 박스 (주황색 테두리)
-                                            drawRect(
-                                                color = Color(0xFFE06D53),
-                                                topLeft = Offset(left, top),
-                                                size = Size(boxW, boxH),
-                                                style = Stroke(width = 6f)
-                                            )
+                                        val (imgW, imgH) = if (bmpRatio > containerRatio) {
+                                            containerW to (containerW / bmpRatio)
+                                        } else {
+                                            (containerH * bmpRatio) to containerH
                                         }
 
-                                        Surface(
-                                            color = Color(0xFFE06D53),
-                                            shape = RoundedCornerShape(6.dp),
+                                        Box(
                                             modifier = Modifier
-                                                .align(Alignment.TopEnd)
-                                                .padding(10.dp)
+                                                .size(imgW, imgH)
+                                                .pointerInput(bmp, roiBoxWidthRatio, roiBoxHeightRatio) {
+                                                    detectTapGestures { offset ->
+                                                        val tapXFrac = offset.x / size.width
+                                                        val tapYFrac = offset.y / size.height
+                                                        val bw = roiBoxWidthRatio.coerceIn(0.1f, 0.95f)
+                                                        val bh = roiBoxHeightRatio.coerceIn(0.05f, 0.95f)
+                                                        selectedRoi = CalendarRoi(
+                                                            x = (tapXFrac - bw / 2f).coerceIn(0f, 1f - bw),
+                                                            y = (tapYFrac - bh / 2f).coerceIn(0f, 1f - bh),
+                                                            width = bw,
+                                                            height = bh
+                                                        )
+                                                        detectedLabel = "달력 위치를 직접 지정했어요 🎯 (원하는 곳 탭 또는 드래그 이동)"
+                                                    }
+                                                }
+                                                .pointerInput(bmp, roiBoxWidthRatio, roiBoxHeightRatio) {
+                                                    detectDragGestures { change, dragAmount ->
+                                                        change.consume()
+                                                        val cur = selectedRoi ?: CalendarRoi(0.2f, 0.2f, roiBoxWidthRatio, roiBoxHeightRatio)
+                                                        val dx = dragAmount.x / size.width
+                                                        val dy = dragAmount.y / size.height
+                                                        selectedRoi = CalendarRoi(
+                                                            x = (cur.x + dx).coerceIn(0f, 1f - cur.width),
+                                                            y = (cur.y + dy).coerceIn(0f, 1f - cur.height),
+                                                            width = cur.width,
+                                                            height = cur.height
+                                                        )
+                                                        detectedLabel = "달력 위치를 드래그하여 맞췄어요 🎯"
+                                                    }
+                                                }
                                         ) {
-                                            Text(
-                                                text = if (isDetectingRoi) "달력 찾는 중..." else "달력 영역 지정됨 🎯",
-                                                color = Color.White,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            Image(
+                                                bitmap = bmp.asImageBitmap(),
+                                                contentDescription = "기준 사진 원본 전체보기",
+                                                modifier = Modifier.fillMaxSize(),
+                                                contentScale = ContentScale.Fit
                                             )
+
+                                            val roi = selectedRoi
+                                            if (roi != null) {
+                                                Canvas(modifier = Modifier.fillMaxSize()) {
+                                                    val w = size.width
+                                                    val h = size.height
+
+                                                    val left = roi.x * w
+                                                    val top = roi.y * h
+                                                    val boxW = roi.width * w
+                                                    val boxH = roi.height * h
+
+                                                    // 주황색 반투명 채우기 + 테두리
+                                                    drawRect(
+                                                        color = Color(0x33E06D53),
+                                                        topLeft = Offset(left, top),
+                                                        size = Size(boxW, boxH)
+                                                    )
+                                                    drawRect(
+                                                        color = Color(0xFFE06D53),
+                                                        topLeft = Offset(left, top),
+                                                        size = Size(boxW, boxH),
+                                                        style = Stroke(width = 5f)
+                                                    )
+                                                }
+                                            }
                                         }
+                                    }
+
+                                    Surface(
+                                        color = Color(0xFFE06D53),
+                                        shape = RoundedCornerShape(6.dp),
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(10.dp)
+                                    ) {
+                                        Text(
+                                            text = if (isDetectingRoi) "달력 찾는 중..." else "달력 영역 지정됨 🎯",
+                                            color = Color.White,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
                                     }
                                 } else {
                                     CircularProgressIndicator(color = Color(0xFFE06D53))
+                                }
+                            }
+
+                            // 달력 영역 박스 크기 미세 조절 컨트롤러
+                            Surface(
+                                color = Color(0xFFFFF3E0),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "📏 달력 영역 박스 크기 조절",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFD84315)
+                                        )
+                                        Text(
+                                            text = "가로 ${(roiBoxWidthRatio * 100).toInt()}% · 세로 ${(roiBoxHeightRatio * 100).toInt()}%",
+                                            fontSize = 11.sp,
+                                            color = Color(0xFFBF360C)
+                                        )
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("가로", fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(28.dp))
+                                        Slider(
+                                            value = roiBoxWidthRatio,
+                                            onValueChange = { newW ->
+                                                roiBoxWidthRatio = newW
+                                                selectedRoi?.let { cur ->
+                                                    selectedRoi = CalendarRoi(
+                                                        x = cur.x.coerceIn(0f, 1f - newW),
+                                                        y = cur.y,
+                                                        width = newW,
+                                                        height = cur.height
+                                                    )
+                                                }
+                                            },
+                                            valueRange = 0.15f..0.90f,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("세로", fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(28.dp))
+                                        Slider(
+                                            value = roiBoxHeightRatio,
+                                            onValueChange = { newH ->
+                                                roiBoxHeightRatio = newH
+                                                selectedRoi?.let { cur ->
+                                                    selectedRoi = CalendarRoi(
+                                                        x = cur.x,
+                                                        y = cur.y.coerceIn(0f, 1f - newH),
+                                                        width = cur.width,
+                                                        height = newH
+                                                    )
+                                                }
+                                            },
+                                            valueRange = 0.08f..0.60f,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
                                 }
                             }
 
