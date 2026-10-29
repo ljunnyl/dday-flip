@@ -34,6 +34,7 @@ import java.io.File
 import java.time.LocalDate
 
 enum class AppScreen {
+    SPLASH,
     START,
     SCAN,
     REVIEW,
@@ -52,7 +53,7 @@ class MainActivity : ComponentActivity() {
             // 권한 허용 여부와 무관하게 서비스는 계속 구동 (알림 노출 여부만 차이)
         }
 
-    private var appScreenState = mutableStateOf(AppScreen.START)
+    private var appScreenState = mutableStateOf(AppScreen.SPLASH)
 
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -100,6 +101,13 @@ class MainActivity : ComponentActivity() {
                     }
 
                     when (currentScreen) {
+                        AppScreen.SPLASH -> {
+                            com.ddayflip.app.ui.screens.SplashScreen(
+                                onFinish = {
+                                    currentScreen = AppScreen.START
+                                }
+                            )
+                        }
                         AppScreen.START -> {
                             StartScreen(
                                 onStartScan = { birthday, rule, roi, maxDday, mode ->

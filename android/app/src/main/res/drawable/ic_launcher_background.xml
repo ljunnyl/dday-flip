@@ -5,10 +5,6 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:fillColor="#181A20"
+        android:fillColor="#F6F3EC"
         android:pathData="M0,0h108v108h-108z" />
-    <!-- Subtle circular ambient glow in background -->
-    <path
-        android:fillColor="#252A36"
-        android:pathData="M54,54m-42,0a42,42 0,1,1 84,0a42,42 0,1,1 -84,0" />
 </vector>

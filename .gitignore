@@ -7,6 +7,10 @@ output/
 *.heic
 *.mp4
 
+# 앱 정적 리소스(아이콘, 스플래시) 예외 허용
+!android/app/src/main/res/**/*.png
+!android/app/src/main/res/**/*.jpg
+
 # 생일 등 개인 설정
 .env
 *.local.*
