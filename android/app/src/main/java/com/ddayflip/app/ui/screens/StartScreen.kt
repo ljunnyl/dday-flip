@@ -80,9 +80,9 @@ fun StartScreen(
 
     var isConfigMode by remember { mutableStateOf(false) }
 
-    var birthdayYear by remember { mutableStateOf("2024") }
+    var birthdayYear by remember { mutableStateOf("2026") }
     var birthdayMonth by remember { mutableStateOf("05") }
-    var birthdayDay by remember { mutableStateOf("21") }
+    var birthdayDay by remember { mutableStateOf("27") }
     var selectedRule by remember { mutableStateOf(DdayStartRule.ONE_BASED) }
 
     var referencePhotoUri by remember { mutableStateOf<Uri?>(null) }
@@ -523,7 +523,7 @@ fun StartScreen(
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(340.dp)
+                                    .height(480.dp)
                                     .clip(RoundedCornerShape(14.dp))
                                     .background(Color(0xFF1E201F)),
                                 contentAlignment = Alignment.Center
