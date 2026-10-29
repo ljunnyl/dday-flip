@@ -128,20 +128,26 @@ class MediaCodecVideoExporter : VideoExporter {
                 drainEncoder(encoder, muxer, bufferInfo, isMuxerStarted) { isMuxerStarted = true; videoTrackIndex = it }
             }
 
-            // 4. 남은 모든 출력 버퍼 드레인 완료
+            // 4. 남은 모든 출력 버퍼 드레인 완료 (최대 100회 시도 후 안전 탈출)
             drainEncoder(encoder, muxer, bufferInfo, isMuxerStarted, drainAll = true) { isMuxerStarted = true; videoTrackIndex = it }
 
             withContext(Dispatchers.Main) {
                 onProgress(1.0f)
             }
 
+            android.util.Log.i("VideoExporter", "Encoding completed successfully: ${outputFile.length()} bytes")
             Result.success(outputFile)
         } catch (e: Exception) {
+            android.util.Log.e("VideoExporter", "Encoding failed with exception", e)
             outputFile.delete()
             Result.failure(e)
         } finally {
             try {
                 encoder?.stop()
+            } catch (e: Exception) {
+                android.util.Log.w("VideoExporter", "encoder.stop failed: ${e.message}")
+            }
+            try {
                 encoder?.release()
             } catch (_: Exception) {}
 
@@ -149,6 +155,10 @@ class MediaCodecVideoExporter : VideoExporter {
                 if (isMuxerStarted) {
                     muxer?.stop()
                 }
+            } catch (e: Exception) {
+                android.util.Log.w("VideoExporter", "muxer.stop failed: ${e.message}")
+            }
+            try {
                 muxer?.release()
             } catch (_: Exception) {}
         }
@@ -163,11 +173,14 @@ class MediaCodecVideoExporter : VideoExporter {
         onMuxerStart: (trackIndex: Int) -> Unit
     ) {
         var started = isMuxerStarted
-        while (true) {
+        var emptyTries = 0
+        val maxEmptyTries = if (drainAll) 80 else 1 // drainAll 모드에서 최대 800ms 대기 후 타임아웃 종료
+
+        while (emptyTries < maxEmptyTries) {
             val outputIndex = encoder.dequeueOutputBuffer(bufferInfo, 10_000)
             if (outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
                 if (!drainAll) break
-                // drainAll 상태에서는 잠시 대기 후 EOS 확인
+                emptyTries++
                 Thread.sleep(10)
                 continue
             } else if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
@@ -179,6 +192,7 @@ class MediaCodecVideoExporter : VideoExporter {
                     onMuxerStart(trackIndex)
                 }
             } else if (outputIndex >= 0) {
+                emptyTries = 0 // 새 버퍼를 받았으므로 카운트 리셋
                 val outputBuffer = encoder.getOutputBuffer(outputIndex)
                 if (outputBuffer != null && (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0 && started && bufferInfo.size > 0) {
                     outputBuffer.position(bufferInfo.offset)
@@ -188,6 +202,7 @@ class MediaCodecVideoExporter : VideoExporter {
                 encoder.releaseOutputBuffer(outputIndex, false)
 
                 if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                    android.util.Log.i("VideoExporter", "EOS buffer encountered in drainEncoder")
                     break
                 }
             }

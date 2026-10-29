@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### Fixed
+- `VideoExporter`: 영상 인코딩 95% 교착 상태(Deadlock) 버그 수정
+  - 인코더 EOS 플래그 전달 후 `drainEncoder` 무한 루프에서 일부 디바이스 칩셋이 EOS 출력 플래그를 지연/미반환할 때 `emptyTries` 타임아웃(800ms) 안전 탈출 로직 적용
+  - 인코딩 정상 완료 즉시 `onProgress(1.0f)` 호출 및 파일 정상 반환으로 완료 화면(`CompleteScreen`) 진입 보장
+
+### Changed
+- `StartScreen`: 기준 사진 등록 UI 고도화
+  - 민서 생일 기본값 `2026.05.27` 영구 고정
+  - 기준 사진 썸네일 크롭 제거 및 480dp 대화면(`ContentScale.Fit`) 확장
+  - 달력 바운딩 박스 가로/세로 영역 조절 슬라이더 탑재로 미세 조정 지원
+- 배포 및 테스트 파이프라인
+  - Firebase App Distribution 기반 스마트폰 무선 배포 자동화 구축 (`couple-time-6b2ea`)
+  - 운영 문서화: `docs/firebase_distribution.md` 작성
+  - v3.0 실시간 스캔 릴, 수동 갤러리 선택, 다크모드 기획안 대시보드(HTML) 및 피그마 3종 디자인 구축
+
 ### Added
 - 리뉴얼 v2.0 감성 육아 UX 및 1일 1장 스마트 액션 플로우 구현
   - `CalendarSequenceValidator`: `selectBestPhotoPerDay` 구현 — 하루 여러 장 촬영 사진 중 `sharpnessScore` 최고 선명도 1장 자동 선별하여 영상 중복 투입 방지
