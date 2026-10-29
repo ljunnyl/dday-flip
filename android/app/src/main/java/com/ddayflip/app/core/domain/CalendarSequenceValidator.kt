@@ -204,6 +204,7 @@ class CalendarSequenceValidator {
      * - STRICT: 달력이 명시적으로 확인된 사진만 남김 (비달력 일상 사진 완전 배제)
      * - RELAXED: 모든 후보 사진 보존
      * - HIGH_PRECISION: 달력이 확인되었거나 선명도가 높은(>= 80.0) 후보 사진을 보존
+     * - BABY_FACE_ONLY: 아기 얼굴/일상 사진 모드로 수집된 후보를 보존
      */
     fun filterByAccuracyMode(
         entries: List<CalendarPhotoEntry>,
@@ -215,6 +216,7 @@ class CalendarSequenceValidator {
             ScanAccuracyMode.HIGH_PRECISION -> entries.filter {
                 it.isCalendarConfirmed || it.ocrDday != null || it.sharpnessScore >= 80.0
             }
+            ScanAccuracyMode.BABY_FACE_ONLY -> entries
         }
     }
 

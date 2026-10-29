@@ -1,11 +1,9 @@
 package com.ddayflip.app.ui.screens
 
 import android.Manifest
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -28,9 +26,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.ChildCare
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayArrow
@@ -62,6 +62,7 @@ import com.ddayflip.app.core.domain.DdayCalculator
 import com.ddayflip.app.core.domain.DdayStartRule
 import com.ddayflip.app.core.domain.ScanAccuracyMode
 import com.ddayflip.app.domain.ocr.DdayTextParser
+import com.ddayflip.app.domain.video.BgmMode
 import com.ddayflip.app.ui.theme.AppVisualTheme
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
@@ -72,9 +73,13 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.LocalDate
 import java.time.LocalDateTime
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 /**
- * R01. 첫 화면 (홈 & 온보딩 + 최근 영상 플레이어 + 테마 3종) + R02. 기준 등록 (실제 사진 OCR 자동 감지 & 탭하여 직접 지정)
+ * R01. 첫 화면 (스튜디오 카드형 홈 & 테마 3종 & 최근 영상 플레이어) +
+ * R02. 기준 등록 (손가락 드래그 달력 영역 지정, 침대 구도 유사도 매칭, 아기 얼굴 전용 모드, BGM 설정, 직접 고르기)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,13 +87,18 @@ fun StartScreen(
     currentTheme: AppVisualTheme = AppVisualTheme.WARM_COTTON,
     onThemeChange: (AppVisualTheme) -> Unit = {},
     recentVideoFile: File? = null,
+    selectedBgmMode: BgmMode = BgmMode.DEFAULT_MUSIC_BOX,
+    customBgmUri: String? = null,
+    onBgmConfigChange: (BgmMode, String?) -> Unit = { _, _ -> },
     onStartScan: (
         birthday: LocalDate,
         rule: DdayStartRule,
         calendarRoi: CalendarRoi?,
         todayMaxDday: Int,
-        accuracyMode: ScanAccuracyMode
-    ) -> Unit = { _, _, _, _, _ -> },
+        accuracyMode: ScanAccuracyMode,
+        matchSceneSimilarity: Boolean,
+        referencePhotoUri: String?
+    ) -> Unit = { _, _, _, _, _, _, _ -> },
     onDirectPhotosSelected: (List<CalendarPhotoEntry>) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -102,6 +112,7 @@ fun StartScreen(
     var birthdayDay by remember { mutableStateOf("27") }
     var selectedRule by remember { mutableStateOf(DdayStartRule.ONE_BASED) }
     var accuracyMode by remember { mutableStateOf(ScanAccuracyMode.STRICT) }
+    var matchSceneSimilarity by remember { mutableStateOf(true) }
 
     var referencePhotoUri by remember { mutableStateOf<Uri?>(null) }
     var referenceBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -109,7 +120,7 @@ fun StartScreen(
     var isDetectingRoi by remember { mutableStateOf(false) }
     var detectedLabel by remember { mutableStateOf<String?>(null) }
 
-    // R01 최근 만든 영상 탐색 (전달받은 파일 또는 cacheDir 내 가장 최근 dday_flip_*.mp4)
+    // R01 최근 만든 영상 탐색
     var latestVideoFile by remember(recentVideoFile) { mutableStateOf<File?>(recentVideoFile) }
     var latestVideoThumbnail by remember { mutableStateOf<Bitmap?>(null) }
     var showVideoPlayerDialog by remember { mutableStateOf(false) }
@@ -164,7 +175,6 @@ fun StartScreen(
                                 var foundRoi: CalendarRoi? = null
                                 var foundText: String? = null
 
-                                // 1. D-day 파서 패턴(D+, 숫자일 등) 매칭 블록 우선 탐색
                                 for (block in visionText.textBlocks) {
                                     val parsed = parser.parse(block.text)
                                     if (parsed != null) {
@@ -173,8 +183,8 @@ fun StartScreen(
                                             foundRoi = CalendarRoi(
                                                 x = (r.left.toFloat() / bmp.width).coerceIn(0f, 0.9f),
                                                 y = (r.top.toFloat() / bmp.height).coerceIn(0f, 0.9f),
-                                                width = (r.width().toFloat() / bmp.width).coerceIn(0.1f, 1f),
-                                                height = (r.height().toFloat() / bmp.height).coerceIn(0.1f, 1f)
+                                                width = (r.width().toFloat() / bmp.width).coerceIn(0.12f, 1f),
+                                                height = (r.height().toFloat() / bmp.height).coerceIn(0.10f, 1f)
                                             ).withMargin(0.20f)
                                             foundText = block.text.trim()
                                             break
@@ -182,7 +192,6 @@ fun StartScreen(
                                     }
                                 }
 
-                                // 2. 숫자가 포함된 블록 차선 탐색
                                 if (foundRoi == null) {
                                     for (block in visionText.textBlocks) {
                                         if (block.text.any { it.isDigit() }) {
@@ -191,8 +200,8 @@ fun StartScreen(
                                                 foundRoi = CalendarRoi(
                                                     x = (r.left.toFloat() / bmp.width).coerceIn(0f, 0.9f),
                                                     y = (r.top.toFloat() / bmp.height).coerceIn(0f, 0.9f),
-                                                    width = (r.width().toFloat() / bmp.width).coerceIn(0.1f, 1f),
-                                                    height = (r.height().toFloat() / bmp.height).coerceIn(0.1f, 1f)
+                                                    width = (r.width().toFloat() / bmp.width).coerceIn(0.12f, 1f),
+                                                    height = (r.height().toFloat() / bmp.height).coerceIn(0.10f, 1f)
                                                 ).withMargin(0.20f)
                                                 foundText = block.text.trim()
                                                 break
@@ -203,24 +212,22 @@ fun StartScreen(
 
                                 if (foundRoi != null) {
                                     selectedRoi = foundRoi
-                                    detectedLabel = "AI 달력 감지 성공: '$foundText' ✨ (터치하여 위치 이동 가능)"
+                                    detectedLabel = "AI 달력 감지 성공: '$foundText' ✨ (👆 손가락으로 드래그하여 영역을 새로 그리거나 이동하세요)"
                                     Log.d("DdayScanner", "Reference Photo: Auto detected ROI at $foundRoi text=$foundText")
                                 } else {
-                                    // 텍스트 미감지 시: 사진 중앙 기본 박스 + 탭해서 직접 지정 유도
-                                    selectedRoi = CalendarRoi(0.25f, 0.15f, 0.50f, 0.40f)
-                                    detectedLabel = "달력 글씨를 자동 감지하지 못했어요. 달력이 있는 곳을 직접 탭해주세요! 👆"
-                                    Log.d("DdayScanner", "Reference Photo: Text not found, fallback to center ROI")
+                                    selectedRoi = CalendarRoi(0.25f, 0.15f, 0.50f, 0.35f)
+                                    detectedLabel = "👆 손가락으로 드래그하여 달력 영역을 지정하세요"
                                 }
                                 isDetectingRoi = false
                             }
                             .addOnFailureListener {
-                                selectedRoi = CalendarRoi(0.25f, 0.15f, 0.50f, 0.40f)
-                                detectedLabel = "달력이 있는 위치를 사진에서 직접 탭해주세요! 👆"
+                                selectedRoi = CalendarRoi(0.25f, 0.15f, 0.50f, 0.35f)
+                                detectedLabel = "👆 손가락으로 드래그하여 달력 영역을 지정하세요"
                                 isDetectingRoi = false
                             }
                     } catch (e: Exception) {
-                        selectedRoi = CalendarRoi(0.25f, 0.15f, 0.50f, 0.40f)
-                        detectedLabel = "달력이 있는 위치를 사진에서 직접 탭해주세요! 👆"
+                        selectedRoi = CalendarRoi(0.25f, 0.15f, 0.50f, 0.35f)
+                        detectedLabel = "👆 손가락으로 드래그하여 달력 영역을 지정하세요"
                         isDetectingRoi = false
                     }
                 }
@@ -238,31 +245,65 @@ fun StartScreen(
         referencePhotoUri = uri
     }
 
+    // 내 음악 파일 선택기 (MP3/M4A 등 오디오 파일)
+    val audioPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {}
+            onBgmConfigChange(BgmMode.CUSTOM_FILE, uri.toString())
+            Toast.makeText(context, "배경음악 파일이 선택되었습니다 🎵", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     val requiredPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         Manifest.permission.READ_MEDIA_IMAGES
     } else {
         Manifest.permission.READ_EXTERNAL_STORAGE
     }
 
-    fun proceedToScan() {
+    fun proceedToScan(overrideMode: ScanAccuracyMode? = null) {
         val y = birthdayYear.toIntOrNull() ?: 2026
-        val m = birthdayMonth.toIntOrNull() ?: 5
-        val d = birthdayDay.toIntOrNull() ?: 27
-        val birthday = LocalDate.of(y, m, d)
+        val m = (birthdayMonth.toIntOrNull() ?: 5).coerceIn(1, 12)
+        val d = (birthdayDay.toIntOrNull() ?: 27).coerceIn(1, 31)
+        val birthday = try {
+            LocalDate.of(y, m, d)
+        } catch (_: Exception) {
+            LocalDate.of(2026, 5, 27)
+        }
+        val modeToUse = overrideMode ?: accuracyMode
         val todayMaxDday = DdayCalculator(birthday, selectedRule)
             .calculate(LocalDateTime.now()).dday
-        onStartScan(birthday, selectedRule, selectedRoi, todayMaxDday, accuracyMode)
+        onStartScan(
+            birthday,
+            selectedRule,
+            if (modeToUse == ScanAccuracyMode.BABY_FACE_ONLY) null else selectedRoi,
+            todayMaxDday,
+            modeToUse,
+            matchSceneSimilarity && referencePhotoUri != null,
+            referencePhotoUri?.toString()
+        )
     }
 
+    // 피드백 1: 인자 없는 기본 생성자 PickMultipleVisualMedia()를 사용하여 갤럭시 Android 13+ 100장 제한 IllegalArgumentException 방지
     val directPhotoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 150)
+        contract = ActivityResultContracts.PickMultipleVisualMedia()
     ) { uris ->
         if (uris.isNotEmpty()) {
             scope.launch {
                 val y = birthdayYear.toIntOrNull() ?: 2026
-                val m = birthdayMonth.toIntOrNull() ?: 5
-                val d = birthdayDay.toIntOrNull() ?: 27
-                val birthday = LocalDate.of(y, m, d)
+                val m = (birthdayMonth.toIntOrNull() ?: 5).coerceIn(1, 12)
+                val d = (birthdayDay.toIntOrNull() ?: 27).coerceIn(1, 31)
+                val birthday = try {
+                    LocalDate.of(y, m, d)
+                } catch (_: Exception) {
+                    LocalDate.of(2026, 5, 27)
+                }
                 val ddayCalc = DdayCalculator(birthday = birthday, rule = selectedRule)
                 val directEntries = mutableListOf<CalendarPhotoEntry>()
 
@@ -280,10 +321,11 @@ fun StartScreen(
                             }
                         } catch (_: Exception) { null } ?: birthday.plusDays(idx.toLong())
 
-                        val calcResult = ddayCalc.calculate(dateTaken.atStartOfDay())
+                        // 피드백 13: 정오(12:00) 기준을 넘겨 5월 27일 사진이 5월 26일로 하루 밀리는 버그 차단
+                        val calcResult = ddayCalc.calculate(dateTaken.atTime(12, 0))
                         directEntries.add(
                             CalendarPhotoEntry(
-                                id = uri.toString(),
+                                id = "${uri}_${idx}",
                                 effectiveDate = calcResult.effectiveDate,
                                 exifDday = calcResult.dday,
                                 ocrDday = calcResult.dday,
@@ -303,11 +345,23 @@ fun StartScreen(
         }
     }
 
+    fun launchDirectPhotoPickerSafely() {
+        try {
+            directPhotoPickerLauncher.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+            )
+        } catch (e: Exception) {
+            Toast.makeText(context, "사진 선택기를 열 수 없습니다: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    var pendingScanMode by remember { mutableStateOf<ScanAccuracyMode?>(null) }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            proceedToScan()
+            proceedToScan(pendingScanMode)
         } else {
             scope.launch {
                 snackbarHostState.showSnackbar(
@@ -322,14 +376,14 @@ fun StartScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text("D-day Flip", fontWeight = FontWeight.Bold) },
+                title = { Text("디데이 넘김", fontWeight = FontWeight.Bold) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant
                 ),
                 actions = {
                     if (isConfigMode) {
                         TextButton(onClick = { isConfigMode = false }) {
-                            Text("홈으로", color = MaterialTheme.colorScheme.primary)
+                            Text("홈으로", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -338,7 +392,7 @@ fun StartScreen(
     ) { padding ->
         if (!isConfigMode) {
             // ==========================================
-            // R01. 첫 화면 (홈 & 온보딩 + 테마 3종 + 최근 영상 카드)
+            // R01. 첫 화면 (스튜디오 카드형 홈 & 온보딩 + 테마 3종 + 최근 영상 카드)
             // ==========================================
             val homeScrollState = rememberScrollState()
             Column(
@@ -346,16 +400,16 @@ fun StartScreen(
                     .fillMaxSize()
                     .padding(padding)
                     .verticalScroll(homeScrollState)
-                    .padding(24.dp),
+                    .padding(horizontal = 20.dp, vertical = 18.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    // 상단 테마 3종 선택 칩 (☁️ 웜 코튼 / 🤍 미니멀 화이트 / 🌙 수유등 다크)
+                    // 상단 테마 3종 선택 칩
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -376,7 +430,7 @@ fun StartScreen(
                         }
                     }
 
-                    // R01 최근 만든 영상 홈 플레이어 카드 (최근 비디오 파일이 존재할 때 노출)
+                    // 최근 만든 영상 홈 플레이어 카드
                     val recentVideo = latestVideoFile
                     if (recentVideo != null && recentVideo.exists()) {
                         Card(
@@ -391,7 +445,6 @@ fun StartScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(14.dp)
                             ) {
-                                // 첫 프레임 썸네일
                                 Box(
                                     modifier = Modifier
                                         .size(64.dp, 88.dp)
@@ -427,7 +480,7 @@ fun StartScreen(
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     Text(
-                                        text = "🎬 최근 만든 D-day 릴스 영상",
+                                        text = "🎬 최근 만든 디데이 릴스",
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 14.sp,
                                         color = MaterialTheme.colorScheme.onSurface
@@ -481,52 +534,28 @@ fun StartScreen(
                         }
                     }
 
+                    // 스튜디오 히어로 배너 카드
                     Card(
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
-                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = RoundedCornerShape(22.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                            modifier = Modifier.padding(20.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Lock,
-                                contentDescription = null,
-                                tint = Color(0xFF2E7D32),
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Text(
-                                text = "🔒 100% 온디바이스: 사진과 영상은 폰 안에서만 안전하게 만들어져요",
-                                color = Color(0xFF1B5E20),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                        shape = RoundedCornerShape(24.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(96.dp)
-                                    .clip(RoundedCornerShape(22.dp))
+                                    .size(72.dp)
+                                    .clip(RoundedCornerShape(18.dp))
                                     .background(Color(0xFF1F2421)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(60.dp, 70.dp)
-                                        .clip(RoundedCornerShape(10.dp))
+                                        .size(48.dp, 54.dp)
+                                        .clip(RoundedCornerShape(8.dp))
                                         .background(Color(0xFFE06D53)),
                                     contentAlignment = Alignment.Center
                                 ) {
@@ -534,84 +563,159 @@ fun StartScreen(
                                         text = "D+",
                                         color = Color.White,
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 24.sp
+                                        fontSize = 20.sp
                                     )
                                 }
                             }
 
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
                                 Text(
-                                    text = "매일 자라나는 우리 아기,\n한 편의 영화가 되는 순간 ✨",
-                                    fontSize = 20.sp,
+                                    text = "하루 한 장, 아이가 자라나는\n시간의 기록 ✨",
+                                    fontSize = 18.sp,
                                     fontWeight = FontWeight.Bold,
-                                    lineHeight = 28.sp,
+                                    lineHeight = 24.sp,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
-                                Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = "D-day 달력 사진을 찾아 날짜 순으로 착착 넘기는\n감성 릴스 영상으로 만들어 드려요.",
-                                    fontSize = 13.sp,
+                                    text = "매일 찍은 달력·아기 사진을 날짜순으로 줄 세워 따뜻한 오르골 릴스로 엮어 드려요.",
+                                    fontSize = 12.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    lineHeight = 18.sp
+                                    lineHeight = 17.sp
                                 )
                             }
                         }
                     }
 
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        shape = RoundedCornerShape(18.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .border(1.dp, MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(18.dp))
+                    // 핵심 기능 요약 2열 카드
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .border(1.dp, MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp))
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(Icons.Default.Movie, contentDescription = null, tint = Color(0xFFE06D53))
+                                Text("1일 1장 자동 선별", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text("스크린샷은 빼고 가장 선명한 컷만 골라요", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .border(1.dp, MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp))
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color(0xFFE06D53))
+                                Text("오르골 BGM 합성", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text("내장 오르골 자장가와 내 음악 파일을 넣어요", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+
+                    // 안심 온디바이스 배지
+                    Surface(
+                        color = Color(0xFFE8F5E9),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
-                            modifier = Modifier.padding(16.dp),
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(54.dp, 64.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(Color(0xFFE06D53)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(Icons.Default.Movie, contentDescription = null, tint = Color.White)
-                            }
-                            Column {
-                                Text(
-                                    text = "1일 1장 최고 선명도 자동 선별",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "하루에 여러 장 찍어도 가장 또렷한 1장만 골라줘요",
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = Color(0xFF2E7D32),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "100% 온디바이스 · 모든 사진과 영상은 내 폰 안에서만 안전하게 처리됩니다",
+                                color = Color(0xFF1B5E20),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            )
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(18.dp))
 
-                Button(
-                    onClick = { isConfigMode = true },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
-                    shape = RoundedCornerShape(16.dp)
+                // 하단 엄지 조작 3트랙 진입 액션 영역
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text("디데이 영상 만들기 시작 ✨", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Button(
+                        onClick = {
+                            accuracyMode = ScanAccuracyMode.STRICT
+                            isConfigMode = true
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(54.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = Color.White)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("✨ AI 달력 자동 찾기 (기준 설정)", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                accuracyMode = ScanAccuracyMode.BABY_FACE_ONLY
+                                isConfigMode = true
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFE06D53))
+                        ) {
+                            Icon(Icons.Default.ChildCare, contentDescription = null, tint = Color(0xFFE06D53), modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("👶 아기 얼굴만 찾기", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE06D53))
+                        }
+
+                        OutlinedButton(
+                            onClick = { launchDirectPhotoPickerSafely() },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.outline)
+                        ) {
+                            Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("🖼️ 내가 직접 고르기", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
         } else {
             // ==========================================
-            // R02. 기준 등록 (실제 사진 OCR 자동 감지 & 탭하여 직접 지정)
+            // R02. 기준 등록 (생일 + 손가락 드래그 ROI + 침대 구도 유사도 + BGM 설정 + 3트랙 시작)
             // ==========================================
             val scrollState = rememberScrollState()
             Column(
@@ -619,16 +723,16 @@ fun StartScreen(
                     .fillMaxSize()
                     .padding(padding)
                     .verticalScroll(scrollState)
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp)
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    text = "우리 아기 생일 및 기준 설정",
+                    text = "생일 및 맞춤 탐색 설정",
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
                 )
 
-                // 생일 입력 카드
+                // 1. 생일 입력 카드
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                     shape = RoundedCornerShape(16.dp),
@@ -636,12 +740,12 @@ fun StartScreen(
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Text(
-                            text = "아기 생년월일 (실제 날짜 입력)",
+                            text = "🎂 아기 생년월일 (출산 전날 D+0 사진도 함께 찾아드려요)",
                             fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
+                            fontSize = 13.sp
                         )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -677,22 +781,20 @@ fun StartScreen(
                             FilterChip(
                                 selected = selectedRule == DdayStartRule.ONE_BASED,
                                 onClick = { selectedRule = DdayStartRule.ONE_BASED },
-                                label = { Text("생일 당일 D+1 (한국식)") },
+                                label = { Text("생일 당일 D+1 (한국식)", fontSize = 11.sp) },
                                 modifier = Modifier.weight(1f)
                             )
                             FilterChip(
                                 selected = selectedRule == DdayStartRule.ZERO_BASED,
                                 onClick = { selectedRule = DdayStartRule.ZERO_BASED },
-                                label = { Text("생일 당일 D+0 (서양식)") },
+                                label = { Text("생일 당일 D+0 (서양식)", fontSize = 11.sp) },
                                 modifier = Modifier.weight(1f)
                             )
                         }
                     }
                 }
 
-                // ==========================================
-                // 기준 D-day 달력 사진 등록 및 시각 검증
-                // ==========================================
+                // 2. 기준 사진 등록 & 손가락 드래그 ROI 지정 & 침대 구도 유사도 매칭 카드
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     shape = RoundedCornerShape(20.dp),
@@ -710,18 +812,18 @@ fun StartScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "우리 집 D-day 달력 기준 사진 등록",
+                                text = "📐 기준 사진 & 달력 영역 드래그 지정",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 15.sp,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Badge(containerColor = Color(0xFFFFECE5)) {
-                                Text("핵심 개선 ✨", color = Color(0xFFE06D53), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text("드래그 지원 ✨", color = Color(0xFFE06D53), fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             }
                         }
 
                         Text(
-                            text = "달력이 나온 사진 1장을 고르면 앱이 달력 위치를 찾고, 원하는 위치를 직접 탭하여 지정할 수도 있어요.",
+                            text = "기준 사진 1장을 고른 뒤 손가락으로 드래그해 달력 위치 박스를 그리거나, 침대/배경 구도 유사도 매칭으로 같은 장소 사진을 정확히 찾을 수 있어요.",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -743,14 +845,12 @@ fun StartScreen(
                                 Text("기준 사진 고르기 (아기 침대/달력 사진)", color = Color(0xFFE06D53), fontWeight = FontWeight.Bold)
                             }
                         } else {
-                            // 사진 전체화면(원본 비율 전체 표시) + 드래그 이동 및 크기 조절
-                            var roiBoxWidthRatio by remember { mutableFloatStateOf(0.40f) }
-                            var roiBoxHeightRatio by remember { mutableFloatStateOf(0.18f) }
+                            var dragStartOffset by remember { mutableStateOf<Offset?>(null) }
 
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(480.dp)
+                                    .height(420.dp)
                                     .clip(RoundedCornerShape(14.dp))
                                     .background(Color(0xFF1E201F)),
                                 contentAlignment = Alignment.Center
@@ -775,35 +875,54 @@ fun StartScreen(
                                         Box(
                                             modifier = Modifier
                                                 .size(imgW, imgH)
-                                                .pointerInput(bmp, roiBoxWidthRatio, roiBoxHeightRatio) {
+                                                .pointerInput(bmp) {
                                                     detectTapGestures { offset ->
-                                                        val tapXFrac = offset.x / size.width
-                                                        val tapYFrac = offset.y / size.height
-                                                        val bw = roiBoxWidthRatio.coerceIn(0.1f, 0.95f)
-                                                        val bh = roiBoxHeightRatio.coerceIn(0.05f, 0.95f)
+                                                        val tapXFrac = (offset.x / size.width).coerceIn(0f, 1f)
+                                                        val tapYFrac = (offset.y / size.height).coerceIn(0f, 1f)
+                                                        val cur = selectedRoi ?: CalendarRoi(0.25f, 0.15f, 0.36f, 0.20f)
+                                                        val bw = cur.width.coerceIn(0.12f, 0.90f)
+                                                        val bh = cur.height.coerceIn(0.08f, 0.90f)
                                                         selectedRoi = CalendarRoi(
                                                             x = (tapXFrac - bw / 2f).coerceIn(0f, 1f - bw),
                                                             y = (tapYFrac - bh / 2f).coerceIn(0f, 1f - bh),
                                                             width = bw,
                                                             height = bh
                                                         )
-                                                        detectedLabel = "달력 위치를 직접 지정했어요 🎯 (원하는 곳 탭 또는 드래그 이동)"
+                                                        detectedLabel = "달력 위치를 이동했어요 🎯 (드래그하여 영역 크기를 직접 그릴 수도 있어요)"
                                                     }
                                                 }
-                                                .pointerInput(bmp, roiBoxWidthRatio, roiBoxHeightRatio) {
-                                                    detectDragGestures { change, dragAmount ->
-                                                        change.consume()
-                                                        val cur = selectedRoi ?: CalendarRoi(0.2f, 0.2f, roiBoxWidthRatio, roiBoxHeightRatio)
-                                                        val dx = dragAmount.x / size.width
-                                                        val dy = dragAmount.y / size.height
-                                                        selectedRoi = CalendarRoi(
-                                                            x = (cur.x + dx).coerceIn(0f, 1f - cur.width),
-                                                            y = (cur.y + dy).coerceIn(0f, 1f - cur.height),
-                                                            width = cur.width,
-                                                            height = cur.height
-                                                        )
-                                                        detectedLabel = "달력 위치를 드래그하여 맞췄어요 🎯"
-                                                    }
+                                                .pointerInput(bmp) {
+                                                    detectDragGestures(
+                                                        onDragStart = { startOffset ->
+                                                            dragStartOffset = startOffset
+                                                        },
+                                                        onDragEnd = {
+                                                            dragStartOffset = null
+                                                            detectedLabel = "손가락 드래그로 달력 영역을 지정했어요 🎯"
+                                                        },
+                                                        onDragCancel = {
+                                                            dragStartOffset = null
+                                                        },
+                                                        onDrag = { change, _ ->
+                                                            change.consume()
+                                                            val start = dragStartOffset ?: change.position
+                                                            val curr = change.position
+                                                            val w = size.width.toFloat().coerceAtLeast(1f)
+                                                            val h = size.height.toFloat().coerceAtLeast(1f)
+
+                                                            val x1 = (min(start.x, curr.x) / w).coerceIn(0f, 0.92f)
+                                                            val y1 = (min(start.y, curr.y) / h).coerceIn(0f, 0.92f)
+                                                            val x2 = (max(start.x, curr.x) / w).coerceIn(x1 + 0.08f, 1f)
+                                                            val y2 = (max(start.y, curr.y) / h).coerceIn(y1 + 0.08f, 1f)
+
+                                                            selectedRoi = CalendarRoi(
+                                                                x = x1,
+                                                                y = y1,
+                                                                width = (x2 - x1).coerceIn(0.08f, 1f - x1),
+                                                                height = (y2 - y1).coerceIn(0.08f, 1f - y1)
+                                                            )
+                                                        }
+                                                    )
                                                 }
                                         ) {
                                             Image(
@@ -823,10 +942,12 @@ fun StartScreen(
                                                     val top = roi.y * h
                                                     val boxW = roi.width * w
                                                     val boxH = roi.height * h
+                                                    val right = left + boxW
+                                                    val bottom = top + boxH
 
-                                                    // 주황색 반투명 채우기 + 테두리
+                                                    // 반투명 채우기 + 테두리
                                                     drawRect(
-                                                        color = Color(0x33E06D53),
+                                                        color = Color(0x38E06D53),
                                                         topLeft = Offset(left, top),
                                                         size = Size(boxW, boxH)
                                                     )
@@ -834,8 +955,28 @@ fun StartScreen(
                                                         color = Color(0xFFE06D53),
                                                         topLeft = Offset(left, top),
                                                         size = Size(boxW, boxH),
-                                                        style = Stroke(width = 5f)
+                                                        style = Stroke(width = 6f)
                                                     )
+
+                                                    // 네 모서리 드래그 핸들 원 표시
+                                                    val corners = listOf(
+                                                        Offset(left, top),
+                                                        Offset(right, top),
+                                                        Offset(left, bottom),
+                                                        Offset(right, bottom)
+                                                    )
+                                                    for (pt in corners) {
+                                                        drawCircle(
+                                                            color = Color.White,
+                                                            radius = 12f,
+                                                            center = pt
+                                                        )
+                                                        drawCircle(
+                                                            color = Color(0xFFE06D53),
+                                                            radius = 8f,
+                                                            center = pt
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -849,7 +990,7 @@ fun StartScreen(
                                             .padding(10.dp)
                                     ) {
                                         Text(
-                                            text = if (isDetectingRoi) "달력 찾는 중..." else "달력 영역 지정됨 🎯",
+                                            text = if (isDetectingRoi) "달력 찾는 중..." else "👆 손가락 드래그로 영역 지정",
                                             color = Color.White,
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
@@ -861,85 +1002,7 @@ fun StartScreen(
                                 }
                             }
 
-                            // 달력 영역 박스 크기 미세 조절 컨트롤러
-                            Surface(
-                                color = Color(0xFFFFF3E0),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "📏 달력 영역 박스 크기 조절",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFFD84315)
-                                        )
-                                        Text(
-                                            text = "가로 ${(roiBoxWidthRatio * 100).toInt()}% · 세로 ${(roiBoxHeightRatio * 100).toInt()}%",
-                                            fontSize = 11.sp,
-                                            color = Color(0xFFBF360C)
-                                        )
-                                    }
-
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text("가로", fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(28.dp), color = Color(0xFF3E2723))
-                                        Slider(
-                                            value = roiBoxWidthRatio,
-                                            onValueChange = { newW ->
-                                                roiBoxWidthRatio = newW
-                                                selectedRoi?.let { cur ->
-                                                    selectedRoi = CalendarRoi(
-                                                        x = cur.x.coerceIn(0f, 1f - newW),
-                                                        y = cur.y,
-                                                        width = newW,
-                                                        height = cur.height
-                                                    )
-                                                }
-                                            },
-                                            valueRange = 0.15f..0.90f,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                    }
-
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text("세로", fontSize = 11.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(28.dp), color = Color(0xFF3E2723))
-                                        Slider(
-                                            value = roiBoxHeightRatio,
-                                            onValueChange = { newH ->
-                                                roiBoxHeightRatio = newH
-                                                selectedRoi?.let { cur ->
-                                                    selectedRoi = CalendarRoi(
-                                                        x = cur.x,
-                                                        y = cur.y.coerceIn(0f, 1f - newH),
-                                                        width = cur.width,
-                                                        height = newH
-                                                    )
-                                                }
-                                            },
-                                            valueRange = 0.08f..0.60f,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                    }
-                                }
-                            }
-
-                            // 감지 결과 피드백 & 탭 안내
+                            // 손가락 드래그 안내 배너
                             Surface(
                                 color = Color(0xFFF1F8E9),
                                 shape = RoundedCornerShape(10.dp),
@@ -956,7 +1019,7 @@ fun StartScreen(
                                         tint = Color(0xFF2E7D32)
                                     )
                                     Text(
-                                        text = detectedLabel ?: "사진에서 실제 달력이 놓인 자리를 직접 탭해주세요!",
+                                        text = detectedLabel ?: "👆 손가락으로 드래그하여 달력 영역을 지정하세요",
                                         fontSize = 11.sp,
                                         color = Color(0xFF1B5E20),
                                         fontWeight = FontWeight.Medium
@@ -964,7 +1027,39 @@ fun StartScreen(
                                 }
                             }
 
-                            // 버튼 옵션 행
+                            // 침대/배경 구도 유사도 매칭 스위치
+                            Surface(
+                                color = Color(0xFFFFF3E0),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "📐 기준 사진과 침대/배경 구도 유사도 매칭 켜기",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFBF360C)
+                                        )
+                                        Text(
+                                            text = "비슷한 침구·조명·배경 구도에서 찍은 아기 사진을 우선 선별해요",
+                                            fontSize = 11.sp,
+                                            color = Color(0xFF5D4037)
+                                        )
+                                    }
+                                    Switch(
+                                        checked = matchSceneSimilarity,
+                                        onCheckedChange = { matchSceneSimilarity = it }
+                                    )
+                                }
+                            }
+
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -978,7 +1073,7 @@ fun StartScreen(
                                     modifier = Modifier.weight(1f),
                                     shape = RoundedCornerShape(10.dp)
                                 ) {
-                                    Text("📷 다른 사진", fontSize = 12.sp)
+                                    Text("📷 다른 사진 고르기", fontSize = 12.sp)
                                 }
                                 TextButton(
                                     onClick = {
@@ -987,18 +1082,14 @@ fun StartScreen(
                                     },
                                     modifier = Modifier.weight(1f)
                                 ) {
-                                    Text("전체 탐색", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("전체 영역 탐색", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // ==========================================
-                // AI 탐색 정확도 모드 선택기 (엄격 / 관대 / 고정밀)
-                // ==========================================
+                // 3. AI 탐색 모드 선택기 (엄격 / 고정밀 / 관대 / 아기 얼굴만)
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
                     shape = RoundedCornerShape(16.dp),
@@ -1008,7 +1099,7 @@ fun StartScreen(
                         modifier = Modifier.padding(14.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("AI 탐색 정확도 설정", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text("🔍 AI 사진 탐색 모드", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1016,7 +1107,7 @@ fun StartScreen(
                             FilterChip(
                                 selected = accuracyMode == ScanAccuracyMode.STRICT,
                                 onClick = { accuracyMode = ScanAccuracyMode.STRICT },
-                                label = { Text("🎯 엄격", fontSize = 11.sp) },
+                                label = { Text("🎯 달력 엄격", fontSize = 11.sp) },
                                 modifier = Modifier.weight(1f)
                             )
                             FilterChip(
@@ -1025,10 +1116,21 @@ fun StartScreen(
                                 label = { Text("🔍 고정밀", fontSize = 11.sp) },
                                 modifier = Modifier.weight(1f)
                             )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
                             FilterChip(
                                 selected = accuracyMode == ScanAccuracyMode.RELAXED,
                                 onClick = { accuracyMode = ScanAccuracyMode.RELAXED },
-                                label = { Text("📸 관대", fontSize = 11.sp) },
+                                label = { Text("📸 달력+일상", fontSize = 11.sp) },
+                                modifier = Modifier.weight(1f)
+                            )
+                            FilterChip(
+                                selected = accuracyMode == ScanAccuracyMode.BABY_FACE_ONLY,
+                                onClick = { accuracyMode = ScanAccuracyMode.BABY_FACE_ONLY },
+                                label = { Text("👶 아기 얼굴만", fontSize = 11.sp) },
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -1040,48 +1142,96 @@ fun StartScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // 2트랙 진입 액션 버튼
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                // 4. 배경음악(BGM) 설정 카드 (내장 오르골 자장가 / 내 음악 파일 / 무음)
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    OutlinedButton(
-                        onClick = {
-                            directPhotoPickerLauncher.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                            )
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(56.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFE06D53))
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color(0xFFE06D53))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("🖼️ 직접 고르기", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE06D53))
+                        Text("🎵 배경음악(BGM) 설정", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            FilterChip(
+                                selected = selectedBgmMode == BgmMode.DEFAULT_MUSIC_BOX,
+                                onClick = { onBgmConfigChange(BgmMode.DEFAULT_MUSIC_BOX, customBgmUri) },
+                                label = { Text("🎵 오르골(내장)", fontSize = 11.sp) },
+                                modifier = Modifier.weight(1.2f)
+                            )
+                            FilterChip(
+                                selected = selectedBgmMode == BgmMode.CUSTOM_FILE,
+                                onClick = {
+                                    audioPickerLauncher.launch("audio/*")
+                                },
+                                label = { Text("📂 내 음악", fontSize = 11.sp) },
+                                modifier = Modifier.weight(1f)
+                            )
+                            FilterChip(
+                                selected = selectedBgmMode == BgmMode.MUTE,
+                                onClick = { onBgmConfigChange(BgmMode.MUTE, customBgmUri) },
+                                label = { Text("🔇 무음", fontSize = 11.sp) },
+                                modifier = Modifier.weight(0.8f)
+                            )
+                        }
+                        Text(
+                            text = if (selectedBgmMode == BgmMode.CUSTOM_FILE && !customBgmUri.isNullOrBlank()) {
+                                "선택된 내 음악 파일이 영상에 합성됩니다 🎵"
+                            } else {
+                                selectedBgmMode.description
+                            },
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
+                }
 
+                // 5. 하단 시작 액션 버튼들
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Button(
                         onClick = {
+                            pendingScanMode = accuracyMode
                             val permissionStatus = ContextCompat.checkSelfPermission(context, requiredPermission)
                             if (permissionStatus == PackageManager.PERMISSION_GRANTED) {
-                                proceedToScan()
+                                proceedToScan(accuracyMode)
                             } else {
                                 permissionLauncher.launch(requiredPermission)
                             }
                         },
                         modifier = Modifier
-                            .weight(1f)
-                            .height(56.dp),
+                            .fillMaxWidth()
+                            .height(54.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
                         shape = RoundedCornerShape(16.dp)
                     ) {
                         Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = Color.White)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("✨ AI 자동 찾기", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (accuracyMode == ScanAccuracyMode.BABY_FACE_ONLY) "👶 아기 얼굴 사진 자동 찾기 시작" else "✨ AI 달력 사진 자동 찾기 시작",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = { launchDirectPhotoPickerSafely() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFE06D53))
+                    ) {
+                        Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color(0xFFE06D53))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("🖼️ 내가 직접 사진 고르기 (장수 제한 없음)", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE06D53))
                     }
                 }
             }
@@ -1145,34 +1295,5 @@ fun StartScreen(
                 }
             }
         }
-    }
-}
-
-private fun loadSampledBitmap(context: Context, uri: Uri, reqWidth: Int, reqHeight: Int): Bitmap? {
-    return try {
-        context.contentResolver.openInputStream(uri)?.use { stream ->
-            val options = BitmapFactory.Options().apply {
-                inJustDecodeBounds = true
-            }
-            BitmapFactory.decodeStream(stream, null, options)
-
-            var inSampleSize = 1
-            if (options.outHeight > reqHeight || options.outWidth > reqWidth) {
-                val halfHeight = options.outHeight / 2
-                val halfWidth = options.outWidth / 2
-                while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
-                    inSampleSize *= 2
-                }
-            }
-
-            context.contentResolver.openInputStream(uri)?.use { secondStream ->
-                val decodeOptions = BitmapFactory.Options().apply {
-                    this.inSampleSize = inSampleSize
-                }
-                BitmapFactory.decodeStream(secondStream, null, decodeOptions)
-            }
-        }
-    } catch (e: Exception) {
-        null
     }
 }

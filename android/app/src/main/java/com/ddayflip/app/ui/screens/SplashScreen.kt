@@ -9,7 +9,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,7 +19,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ddayflip.app.R
@@ -104,7 +102,7 @@ fun SplashScreen(
                     .padding(horizontal = 14.dp, vertical = 6.dp)
             ) {
                 Text(
-                    text = "D-day Flip v3.0",
+                    text = "D-day Flip Studio",
                     color = Color.White,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -115,9 +113,9 @@ fun SplashScreen(
             Spacer(modifier = Modifier.height(14.dp))
 
             Text(
-                text = "민서의 D-Day 넘김",
+                text = "디데이 넘김",
                 color = Color.White,
-                fontSize = 26.sp,
+                fontSize = 28.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = (-0.5).sp
             )
@@ -125,7 +123,7 @@ fun SplashScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "우리 아이가 자라나는 매일의 순간",
+                text = "하루 한 장, 아이가 자라나는 시간의 기록",
                 color = Color(0xFFF3EED9),
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Medium

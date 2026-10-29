@@ -21,6 +21,7 @@ import com.ddayflip.app.core.domain.DdayStartRule
 import com.ddayflip.app.core.domain.SequenceValidationResult
 import com.ddayflip.app.data.MediaStorePhotoRepository
 import com.ddayflip.app.domain.repository.PhotoRepository
+import com.ddayflip.app.domain.video.BgmMode
 import com.ddayflip.app.domain.video.VideoExportConfig
 import com.ddayflip.app.service.PhotoScanForegroundService
 import com.ddayflip.app.service.ScanServiceState
@@ -72,12 +73,19 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     var currentScreen by remember { appScreenState }
-                    var scanStartDate by remember { mutableStateOf(LocalDate.now().minusDays(150)) }
+                    var babyBirthday by remember { mutableStateOf(LocalDate.now().minusDays(150)) }
+                    var scanStartDate by remember { mutableStateOf(LocalDate.now().minusDays(151)) }
                     var scanEndDate by remember { mutableStateOf(LocalDate.now()) }
                     var ddayRule by remember { mutableStateOf(DdayStartRule.ONE_BASED) }
                     var calendarRoi by remember { mutableStateOf<CalendarRoi?>(null) }
                     var todayMaxDday by remember { mutableIntStateOf(150) }
                     var accuracyMode by remember { mutableStateOf(com.ddayflip.app.core.domain.ScanAccuracyMode.STRICT) }
+                    var matchSceneSimilarity by remember { mutableStateOf(false) }
+                    var referencePhotoUri by remember { mutableStateOf<String?>(null) }
+
+                    var selectedBgmMode by remember { mutableStateOf(BgmMode.DEFAULT_MUSIC_BOX) }
+                    var customBgmUri by remember { mutableStateOf<String?>(null) }
+
                     var validationResult by remember {
                         mutableStateOf<SequenceValidationResult?>(null)
                     }
@@ -85,7 +93,13 @@ class MainActivity : ComponentActivity() {
                         mutableStateOf<List<CalendarPhotoEntry>>(emptyList())
                     }
                     var exportedVideoFile by remember { mutableStateOf<File?>(null) }
-                    val exportConfig = remember { VideoExportConfig() }
+
+                    val exportConfig = remember(selectedBgmMode, customBgmUri) {
+                        VideoExportConfig(
+                            bgmMode = selectedBgmMode,
+                            customBgmUri = customBgmUri
+                        )
+                    }
 
                     // 서비스 상태 관찰 및 화면 자동 복구
                     val currentServiceState by PhotoScanForegroundService.scanState.collectAsState()
@@ -116,13 +130,24 @@ class MainActivity : ComponentActivity() {
                                 currentTheme = currentTheme,
                                 onThemeChange = { currentTheme = it },
                                 recentVideoFile = exportedVideoFile,
-                                onStartScan = { birthday, rule, roi, maxDday, mode ->
+                                selectedBgmMode = selectedBgmMode,
+                                customBgmUri = customBgmUri,
+                                onBgmConfigChange = { mode, uri ->
+                                    selectedBgmMode = mode
+                                    customBgmUri = uri
+                                },
+                                onStartScan = { birthday, rule, roi, maxDday, mode, matchSim, refUri ->
+                                    PhotoScanForegroundService.resetState()
                                     ddayRule = rule
-                                    scanStartDate = birthday
+                                    babyBirthday = birthday
+                                    // 피드백 13: 출산 전날(birthday.minusDays(1)) 설레며 찍은 D+0/D-1 사진도 포함되도록 스캔 시작일 설정
+                                    scanStartDate = birthday.minusDays(1)
                                     scanEndDate = birthday.plusDays(150)
                                     calendarRoi = roi
                                     todayMaxDday = maxDday
                                     accuracyMode = mode
+                                    matchSceneSimilarity = matchSim
+                                    referencePhotoUri = refUri
                                     currentScreen = AppScreen.SCAN
                                 },
                                 onDirectPhotosSelected = { directEntries ->
@@ -139,11 +164,13 @@ class MainActivity : ComponentActivity() {
                             ScanScreen(
                                 startDate = scanStartDate,
                                 endDate = scanEndDate,
-                                birthday = scanStartDate,
+                                birthday = babyBirthday,
                                 ddayRule = ddayRule,
                                 calendarRoi = calendarRoi,
                                 todayMaxDday = todayMaxDday,
                                 accuracyMode = accuracyMode,
+                                matchSceneSimilarity = matchSceneSimilarity,
+                                referencePhotoUri = referencePhotoUri,
                                 photoRepository = photoRepository,
                                 onCancelScan = {
                                     currentScreen = AppScreen.START
@@ -174,6 +201,7 @@ class MainActivity : ComponentActivity() {
                         AppScreen.EXPORTING -> {
                             ExportingScreen(
                                 entries = entriesToExport,
+                                exportConfig = exportConfig,
                                 onExportComplete = { file ->
                                     exportedVideoFile = file
                                     currentScreen = AppScreen.COMPLETE

@@ -3,6 +3,9 @@ package com.ddayflip.app.ui.components
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,6 +41,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * 특정 날짜의 사진을 1초 만에 다른 컷으로 맞교환하는 인스턴트 바텀시트
+ * - 피드백 14: 당일 + 앞뒤 ±3일 사진 즉시 노출 + [📂 전체 사진첩에서 직접 찾기] 버튼 제공
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,6 +54,24 @@ fun PhotoSwapBottomSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val haptic = LocalHapticFeedback.current
+
+    // 전체 사진첩에서 직접 고르기 런처
+    val fullGalleryPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val pickedPhoto = GalleryPhoto(
+                id = System.currentTimeMillis(),
+                contentUri = uri,
+                dateTakenMs = System.currentTimeMillis(),
+                dateTakenLocalDate = targetEntry.effectiveDate,
+                width = 1080,
+                height = 1920,
+                orientation = 0
+            )
+            onPhotoSelected(pickedPhoto)
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
@@ -91,7 +114,7 @@ fun PhotoSwapBottomSheet(
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "📅 ${targetEntry.effectiveDate} 촬영된 사진 (${sameDayPhotos.size}장)",
+                        text = "📅 ${targetEntry.effectiveDate} 및 앞뒤 ±3일 사진 (${sameDayPhotos.size}장)",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -101,7 +124,34 @@ fun PhotoSwapBottomSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // 피드백 14: 전체 사진첩에서 직접 찾기 버튼 (항상 노출)
+            OutlinedButton(
+                onClick = {
+                    try {
+                        fullGalleryPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    } catch (_: Exception) {}
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFE06D53))
+            ) {
+                Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color(0xFFE06D53), modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "📂 전체 사진첩에서 직접 찾기",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFE06D53)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
 
             if (isLoading) {
                 Box(
@@ -124,12 +174,12 @@ fun PhotoSwapBottomSheet(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = "해당 날짜에 촬영된 다른 사진이 없습니다.",
+                            text = "해당 날짜 전후(±3일)에 촬영된 다른 사진이 없습니다.",
                             fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = "현재 선택된 사진을 그대로 사용하거나 날짜를 건너뛸 수 있습니다.",
+                            text = "위의 [📂 전체 사진첩에서 직접 찾기] 버튼을 눌러 원하는 사진을 골라주세요.",
                             fontSize = 11.sp,
                             color = Color.Gray
                         )
@@ -137,24 +187,25 @@ fun PhotoSwapBottomSheet(
                 }
             } else {
                 Text(
-                    text = "원하는 사진을 터치하면 바로 교체됩니다 👇",
+                    text = "원하는 사진을 터치하면 바로 교체됩니다 (당일 사진 우선 정렬) 👇",
                     fontSize = 12.sp,
                     color = Color(0xFFE06D53),
                     fontWeight = FontWeight.SemiBold
                 )
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // 당일 사진 3열 그리드
+                // 당일 + ±3일 사진 3열 그리드
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 380.dp),
+                        .heightIn(max = 360.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(sameDayPhotos) { photo ->
                         val isCurrent = photo.contentUri.toString() == targetEntry.photoUri
+                        val isSameDate = photo.dateTakenLocalDate == targetEntry.effectiveDate
                         Box(
                             modifier = Modifier
                                 .aspectRatio(1f)
@@ -197,6 +248,21 @@ fun PhotoSwapBottomSheet(
                                             fontWeight = FontWeight.Bold
                                         )
                                     }
+                                }
+                            } else {
+                                // 촬영 날짜 뱃지 표시
+                                Surface(
+                                    color = if (isSameDate) Color(0xCC2E7D32) else Color(0xAA000000),
+                                    shape = RoundedCornerShape(topStart = 6.dp),
+                                    modifier = Modifier.align(Alignment.BottomEnd)
+                                ) {
+                                    Text(
+                                        text = "${photo.dateTakenLocalDate.monthValue}/${photo.dateTakenLocalDate.dayOfMonth}",
+                                        color = Color.White,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                    )
                                 }
                             }
                         }

@@ -6,14 +6,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.WarningAmber
@@ -40,15 +43,15 @@ import com.ddayflip.app.domain.model.GalleryPhoto
 import com.ddayflip.app.ui.components.PhotoSwapBottomSheet
 import com.ddayflip.app.ui.components.ThumbnailImage
 import kotlinx.coroutines.launch
+import java.time.temporal.ChronoUnit
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
  * R04. 스마트 검수 & 타임라인 화면
- * - 1일 1장 최고 선명도 자동 선별 (중복 투입 방지)
- * - 1초 인스턴트 사진 교체 바텀시트 연동 (해당 날짜 사진 즉시 포커싱)
- * - 갤럭시 스타일 패스트 스크롤러 (슬림 스크롤 핸들 + 플로팅 날짜 말풍선)
- * - 몰아찍기 스마트 분배 (Idea 08) 원터치 버튼
- * - 스티커 · 이모티콘 · 자막 꾸미기 다이얼로그 (Idea 04)
+ * - 피드백 11: 달력 미넘김 의심 카드에 실제 관련 사진들의 썸네일과 날짜를 나란히 직접 보여주고 즉시 반영
+ * - 피드백 12: 같은 날 2장 이상 찍힌 사진 후보들의 썸네일을 나란히 비교하여 사용자가 직접 대표 사진을 탭해 선택
+ * - 피드백 14: 타임라인 아이템 클릭 시 당일 + 앞뒤 ±3일 사진을 조회하고 전체 사진첩에서도 바로 교체 지원
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -83,9 +86,14 @@ fun ReviewScreen(
         }
     }
 
-    val hasBurstPhotos = remember(rawEntries) {
-        rawEntries.groupBy { it.resolvedDday }.any { it.value.size > 1 }
+    // 피드백 12: 동일 날짜(resolvedDday)에 2장 이상 후보가 존재하는 그룹 추출
+    val multiCandidateGroups = remember(rawEntries) {
+        rawEntries.groupBy { it.resolvedDday }
+            .filter { it.value.size > 1 }
+            .toSortedMap()
     }
+
+    val hasBurstPhotos = multiCandidateGroups.isNotEmpty()
 
     // 사진 교체 바텀시트 상태
     var swapTargetEntry by remember { mutableStateOf<CalendarPhotoEntry?>(null) }
@@ -106,14 +114,15 @@ fun ReviewScreen(
         listState.firstVisibleItemIndex,
         activeEntries.size,
         isDraggingFastScroll,
-        dragFraction
+        dragFraction,
+        unresolvedIssues.size,
+        multiCandidateGroups.size
     ) {
         if (activeEntries.isEmpty()) 0
         else if (isDraggingFastScroll) {
             (dragFraction * (activeEntries.size - 1)).roundToInt().coerceIn(0, activeEntries.size - 1)
         } else {
-            // 상단 헤더/이슈 아이템 오프셋 보정
-            val headerItemsCount = 2 + if (unresolvedIssues.isNotEmpty()) unresolvedIssues.size else 1
+            val headerItemsCount = 2 + multiCandidateGroups.size + if (unresolvedIssues.isNotEmpty()) unresolvedIssues.size else 1
             (listState.firstVisibleItemIndex - headerItemsCount).coerceIn(0, activeEntries.size - 1)
         }
     }
@@ -191,18 +200,30 @@ fun ReviewScreen(
                         fontWeight = FontWeight.ExtraBold
                     )
                     Text(
-                        text = "카드를 탭해 다른 사진으로 교체하거나 [✨ 꾸미기]로 귀여운 스티커·축하 자막을 넣어보세요.",
-                        fontSize = 13.sp,
+                        text = "같은 날 여러 장 찍은 사진 중 마음에 드는 컷을 직접 고르거나, 카드를 탭해 ±3일/전체 사진첩 사진으로 교체해 보세요.",
+                        fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                 }
 
                 // ==========================================
-                // Idea 08. 몰아찍기 스마트 분배 원터치 배너
+                // 피드백 12. 같은 날 여러 장 찍은 사진 썸네일 직접 비교 & 대표 사진 선택 카드
                 // ==========================================
-                if (effectiveMissingDays.isNotEmpty() && hasBurstPhotos) {
+                if (multiCandidateGroups.isNotEmpty()) {
                     item {
+                        Text(
+                            text = "📸 같은 날 여러 장 찍은 사진 (${multiCandidateGroups.size}일) — 원하는 컷을 탭해 골라주세요",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFBF360C)
+                        )
+                    }
+                    val groupList = multiCandidateGroups.entries.toList()
+                    itemsIndexed(groupList) { _, (dday, candidates) ->
+                        val currentlySelectedId = activeEntries.firstOrNull { it.resolvedDday == dday }?.id
+                        val sampleDate = candidates.first().effectiveDate
+
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
@@ -214,36 +235,109 @@ fun ReviewScreen(
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 Text(
-                                    text = "💡 같은 날 여러 장 찍은 사진이 있어요!",
+                                    text = "📸 D+$dday (${sampleDate.monthValue}/${sampleDate.dayOfMonth})에 찍은 사진 ${candidates.size}장 — 어떤 사진을 쓸까요?",
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp,
+                                    fontSize = 13.sp,
                                     color = Color(0xFFBF360C)
                                 )
-                                Text(
-                                    text = "비어 있는 날짜(${effectiveMissingDays.joinToString { "D+$it" }})에 몰아찍은 사진들을 순서대로 채워 넣을 수 있어요.",
-                                    fontSize = 12.sp,
-                                    color = Color(0xFF3E2723)
-                                )
-                                Button(
-                                    onClick = {
-                                        val distributed = validator.distributeBurstPhotos(rawEntries, effectiveMissingDays)
-                                        rawEntries = distributed
-                                        val updatedBest = validator.selectBestPhotoPerDay(distributed)
-                                        activeEntries = updatedBest
-                                        unresolvedIssues = unresolvedIssues.filterNot { it.type == IssueType.MISSING_DAYS }
-                                        onEntriesChanged(distributed)
-                                        Toast.makeText(context, "몰아찍은 사진으로 빈 날짜를 자동 채웠습니다 ✨", Toast.LENGTH_SHORT).show()
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
-                                    shape = RoundedCornerShape(10.dp),
-                                    modifier = Modifier.fillMaxWidth()
+
+                                // 가로 스크롤로 모든 후보 사진 썸네일을 나란히 비교
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    Text(
-                                        text = "✨ 몰아찍은 사진으로 빈 날짜 자동 채우기",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
+                                    candidates.forEachIndexed { idx, candidate ->
+                                        val isSelected = candidate.id == currentlySelectedId
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                                            modifier = Modifier
+                                                .width(96.dp)
+                                                .clickable {
+                                                    // 사용자가 탭한 사진을 해당 날짜의 대표 사진으로 즉시 반영
+                                                    val updatedActive = activeEntries.map { active ->
+                                                        if (active.resolvedDday == dday) candidate else active
+                                                    }
+                                                    activeEntries = updatedActive
+                                                    onEntriesChanged(updatedActive)
+                                                    Toast.makeText(
+                                                        context,
+                                                        "D+$dday 대표 사진으로 ${idx + 1}번째 사진을 선택했습니다 ✨",
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                }
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(92.dp)
+                                                    .clip(RoundedCornerShape(12.dp))
+                                                    .border(
+                                                        width = if (isSelected) 3.dp else 1.dp,
+                                                        color = if (isSelected) Color(0xFFE06D53) else Color.Gray.copy(alpha = 0.4f),
+                                                        shape = RoundedCornerShape(12.dp)
+                                                    )
+                                                    .background(Color.Black.copy(alpha = 0.08f))
+                                            ) {
+                                                ThumbnailImage(
+                                                    photoUri = candidate.photoUri,
+                                                    modifier = Modifier.fillMaxSize()
+                                                )
+                                                if (isSelected) {
+                                                    Surface(
+                                                        color = Color(0xFFE06D53),
+                                                        shape = RoundedCornerShape(bottomEnd = 8.dp),
+                                                        modifier = Modifier.align(Alignment.TopStart)
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Icon(
+                                                                Icons.Default.Done,
+                                                                contentDescription = null,
+                                                                tint = Color.White,
+                                                                modifier = Modifier.size(10.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(2.dp))
+                                                            Text("선택됨", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Text(
+                                                text = if (isSelected) "✅ 대표 사진" else "후보 ${idx + 1} 탭하여 선택",
+                                                fontSize = 10.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (isSelected) Color(0xFFE06D53) else Color(0xFF5D4037)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // 결측일이 있을 때만 선택적으로 빈 날짜에 나누기 버튼 제공
+                                if (effectiveMissingDays.isNotEmpty()) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            val distributed = validator.distributeBurstPhotos(rawEntries, effectiveMissingDays)
+                                            rawEntries = distributed
+                                            val updatedBest = validator.selectBestPhotoPerDay(distributed)
+                                            activeEntries = updatedBest
+                                            unresolvedIssues = unresolvedIssues.filterNot { it.type == IssueType.MISSING_DAYS }
+                                            onEntriesChanged(updatedBest)
+                                            Toast.makeText(context, "남은 후보 사진들을 빈 날짜에 순서대로 나누었습니다 ✨", Toast.LENGTH_SHORT).show()
+                                        },
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = "빈 날짜(${effectiveMissingDays.take(3).joinToString { "D+$it" }})에 순서대로 나누기",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFE06D53)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -251,7 +345,7 @@ fun ReviewScreen(
                 }
 
                 // ==========================================
-                // 해결해야 할 이슈 카드 목록 (원터치 액션 카드)
+                // 해결해야 할 이슈 카드 목록 (피드백 11: 실제 사진 썸네일 직접 비교 & 실제 데이터 반영)
                 // ==========================================
                 if (unresolvedIssues.isNotEmpty()) {
                     item {
@@ -263,17 +357,52 @@ fun ReviewScreen(
                         )
                     }
                     itemsIndexed(unresolvedIssues) { index, issue ->
+                        val relatedPhotos = remember(issue, rawEntries, activeEntries) {
+                            val pool = (rawEntries + activeEntries).distinctBy { it.id }
+                            val byIds = pool.filter { it.id in issue.relatedEntryIds }
+                            if (byIds.isNotEmpty()) {
+                                byIds
+                            } else {
+                                pool.filter { it.resolvedDday == issue.targetDday }.take(2)
+                            }
+                        }
+
                         ActionableIssueCard(
                             issue = issue,
+                            relatedEntries = relatedPhotos,
                             canDistributeBurst = issue.type == IssueType.MISSING_DAYS && hasBurstPhotos,
                             onDistributeBurst = {
                                 val targetMissing = issue.missingDays.ifEmpty { effectiveMissingDays }
                                 val distributed = validator.distributeBurstPhotos(rawEntries, targetMissing)
                                 rawEntries = distributed
-                                activeEntries = validator.selectBestPhotoPerDay(distributed)
+                                val updatedBest = validator.selectBestPhotoPerDay(distributed)
+                                activeEntries = updatedBest
                                 unresolvedIssues = unresolvedIssues.toMutableList().also { it.removeAt(index) }
-                                onEntriesChanged(distributed)
-                                Toast.makeText(context, "몰아찍은 사진으로 빈 날짜를 자동 채웠습니다 ✨", Toast.LENGTH_SHORT).show()
+                                onEntriesChanged(updatedBest)
+                                Toast.makeText(context, "빈 날짜에 후보 사진을 채웠습니다 ✨", Toast.LENGTH_SHORT).show()
+                            },
+                            onChangeSecondPhotoDday = { newDday ->
+                                val secondId = relatedPhotos.lastOrNull()?.id
+                                if (secondId != null) {
+                                    rawEntries = rawEntries.map { entry ->
+                                        if (entry.id == secondId) entry.copy(ocrDday = newDday, resolvedDday = newDday) else entry
+                                    }
+                                    val updatedBest = validator.selectBestPhotoPerDay(rawEntries)
+                                    activeEntries = updatedBest
+                                    onEntriesChanged(updatedBest)
+                                }
+                                unresolvedIssues = unresolvedIssues.toMutableList().also { it.removeAt(index) }
+                                Toast.makeText(context, "둘째 날 사진을 D+$newDday 으로 변경했습니다 ✨", Toast.LENGTH_SHORT).show()
+                            },
+                            onRemoveSecondPhoto = {
+                                val removeId = relatedPhotos.lastOrNull()?.id
+                                if (removeId != null) {
+                                    rawEntries = rawEntries.filterNot { it.id == removeId }
+                                    activeEntries = activeEntries.filterNot { it.id == removeId }
+                                    onEntriesChanged(activeEntries)
+                                }
+                                unresolvedIssues = unresolvedIssues.toMutableList().also { it.removeAt(index) }
+                                Toast.makeText(context, "해당 사진을 타임라인에서 제외했습니다.", Toast.LENGTH_SHORT).show()
                             },
                             onResolveAction = { msg ->
                                 Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
@@ -322,7 +451,14 @@ fun ReviewScreen(
                             coroutineScope.launch {
                                 isLoadingSameDayPhotos = true
                                 val repository = MediaStorePhotoRepository(context)
-                                sameDayPhotos = repository.getPhotosOnDate(entry.effectiveDate)
+                                // 피드백 14: 당일 사진뿐만 아니라 앞뒤 ±3일 사진을 함께 조회하고 당일 사진을 맨 앞으로 정렬
+                                val nearbyPhotos = repository.getPhotosBetween(
+                                    entry.effectiveDate.minusDays(3),
+                                    entry.effectiveDate.plusDays(3)
+                                ).sortedBy {
+                                    abs(ChronoUnit.DAYS.between(entry.effectiveDate, it.dateTakenLocalDate))
+                                }
+                                sameDayPhotos = nearbyPhotos
                                 isLoadingSameDayPhotos = false
                             }
                         },
@@ -360,7 +496,6 @@ fun ReviewScreen(
                     val currentOffsetY = (thumbFraction * maxOffsetPx).roundToInt()
                     val currentEntry = activeEntries[currentVisibleEntryIndex.coerceIn(0, activeEntries.size - 1)]
 
-                    // 플로팅 날짜 말풍선 (스크롤 중이거나 드래그 중일 때 노출)
                     if (showFastScroller) {
                         Surface(
                             modifier = Modifier
@@ -380,19 +515,18 @@ fun ReviewScreen(
                         }
                     }
 
-                    // 우측 슬림 스크롤 핸들 터치/드래그 영역
                     Box(
                         modifier = Modifier
                             .fillMaxHeight()
                             .width(28.dp)
-                            .pointerInput(activeEntries.size, unresolvedIssues.size) {
+                            .pointerInput(activeEntries.size, unresolvedIssues.size, multiCandidateGroups.size) {
                                 detectVerticalDragGestures(
                                     onDragStart = { offset ->
                                         isDraggingFastScroll = true
                                         val frac = (offset.y / trackHeightPx.toFloat()).coerceIn(0f, 1f)
                                         dragFraction = frac
                                         val targetIdx = (frac * (activeEntries.size - 1)).roundToInt()
-                                        val headerOffset = 2 + if (unresolvedIssues.isNotEmpty()) unresolvedIssues.size else 1
+                                        val headerOffset = 2 + multiCandidateGroups.size + if (unresolvedIssues.isNotEmpty()) unresolvedIssues.size else 1
                                         coroutineScope.launch {
                                             listState.scrollToItem((headerOffset + targetIdx).coerceAtLeast(0))
                                         }
@@ -408,7 +542,7 @@ fun ReviewScreen(
                                         val frac = (change.position.y / trackHeightPx.toFloat()).coerceIn(0f, 1f)
                                         dragFraction = frac
                                         val targetIdx = (frac * (activeEntries.size - 1)).roundToInt()
-                                        val headerOffset = 2 + if (unresolvedIssues.isNotEmpty()) unresolvedIssues.size else 1
+                                        val headerOffset = 2 + multiCandidateGroups.size + if (unresolvedIssues.isNotEmpty()) unresolvedIssues.size else 1
                                         coroutineScope.launch {
                                             listState.scrollToItem((headerOffset + targetIdx).coerceAtLeast(0))
                                         }
@@ -417,7 +551,6 @@ fun ReviewScreen(
                             },
                         contentAlignment = Alignment.TopEnd
                     ) {
-                        // 슬림 스크롤 핸들 필(Pill)
                         Box(
                             modifier = Modifier
                                 .offset { IntOffset(x = 0, y = currentOffsetY) }
@@ -436,7 +569,7 @@ fun ReviewScreen(
     }
 
     // ==========================================
-    // 1초 인스턴트 사진 교체 바텀시트
+    // 1초 인스턴트 사진 교체 바텀시트 (당일 + ±3일 + 전체 사진첩)
     // ==========================================
     swapTargetEntry?.let { target ->
         PhotoSwapBottomSheet(
@@ -455,6 +588,16 @@ fun ReviewScreen(
                     }
                 }
                 activeEntries = updatedActive
+                rawEntries = rawEntries.map { item ->
+                    if (item.id == target.id) {
+                        item.copy(
+                            photoUri = newPhoto.contentUri.toString(),
+                            sharpnessScore = 999.0
+                        )
+                    } else {
+                        item
+                    }
+                }
                 onEntriesChanged(updatedActive)
                 Toast.makeText(context, "D+${target.resolvedDday} 사진이 교체되었습니다 ✨", Toast.LENGTH_SHORT).show()
                 swapTargetEntry = null
@@ -533,7 +676,6 @@ private fun PhotoDecorateDialog(
                     fontWeight = FontWeight.SemiBold
                 )
 
-                // 스티커 2행 4열 배치
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     stickers.chunked(4).forEach { rowStickers ->
                         Row(
@@ -589,8 +731,11 @@ private fun PhotoDecorateDialog(
 @Composable
 private fun ActionableIssueCard(
     issue: SequenceIssue,
+    relatedEntries: List<CalendarPhotoEntry> = emptyList(),
     canDistributeBurst: Boolean = false,
     onDistributeBurst: () -> Unit = {},
+    onChangeSecondPhotoDday: (Int) -> Unit = {},
+    onRemoveSecondPhoto: () -> Unit = {},
     onResolveAction: (String) -> Unit
 ) {
     val isUnflipped = issue.type == IssueType.UNFLIPPED_CALENDAR
@@ -634,6 +779,56 @@ private fun ActionableIssueCard(
                 lineHeight = 16.sp
             )
 
+            // 피드백 11: 달력 미넘김 의심 사진을 카드 안에 실제 썸네일과 촬영 날짜로 나란히 직접 표시!
+            if (relatedEntries.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    relatedEntries.forEachIndexed { idx, rel ->
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(96.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .border(1.5.dp, Color(0xFFD97706), RoundedCornerShape(12.dp))
+                                    .background(Color.Black.copy(alpha = 0.08f))
+                            ) {
+                                ThumbnailImage(
+                                    photoUri = rel.photoUri,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                                Surface(
+                                    color = Color(0xCC1E293B),
+                                    shape = RoundedCornerShape(bottomEnd = 8.dp),
+                                    modifier = Modifier.align(Alignment.TopStart)
+                                ) {
+                                    Text(
+                                        text = if (idx == 0) "첫째 날" else "둘째 날",
+                                        color = Color.White,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "${rel.effectiveDate.monthValue}/${rel.effectiveDate.dayOfMonth} (D+${rel.resolvedDday})",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF3E2723)
+                            )
+                        }
+                    }
+                }
+            }
+
             if (canDistributeBurst) {
                 Button(
                     onClick = onDistributeBurst,
@@ -641,26 +836,27 @@ private fun ActionableIssueCard(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 ) {
-                    Text("✨ 몰아찍은 사진으로 빈 날짜 자동 채우기", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("✨ 후보 사진으로 빈 날짜 자동 채우기", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 }
             }
 
-            // 원터치 해결 액션 버튼 행
+            // 원터치 해결 액션 버튼 행 (실제 데이터 즉시 반영)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (isUnflipped) {
+                    val nextDday = issue.targetDday + 1
                     Button(
-                        onClick = { onResolveAction("D+${issue.targetDday + 1}로 반영했습니다.") },
+                        onClick = { onChangeSecondPhotoDday(nextDday) },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text("D+${issue.targetDday + 1}로 쓸게요", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("둘째 날을 D+${nextDday}로 변경", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     }
                     OutlinedButton(
-                        onClick = { onResolveAction("해당 날짜 사진을 제외했습니다.") },
+                        onClick = { onRemoveSecondPhoto() },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(8.dp)
                     ) {
@@ -668,14 +864,14 @@ private fun ActionableIssueCard(
                     }
                 } else {
                     OutlinedButton(
-                        onClick = { onResolveAction("사진 추가를 준비합니다.") },
+                        onClick = { onResolveAction("타임라인에서 언제든 사진을 추가·교체할 수 있습니다.") },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(8.dp)
                     ) {
-                        Text("+ 직접 추가", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("확인 완료", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                     Button(
-                        onClick = { onResolveAction("해당 일자를 건너뜁니다.") },
+                        onClick = { onResolveAction("해당 일자를 건너뛰고 진행합니다.") },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF78909C)),
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(8.dp)
@@ -706,7 +902,6 @@ private fun PhotoTimelineItem(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 실제 사진 썸네일
             Box(
                 modifier = Modifier
                     .size(64.dp)
@@ -732,7 +927,6 @@ private fun PhotoTimelineItem(
                     }
                 }
 
-                // 스티커 이모지가 적용된 경우 썸네일 우하단에 뱃지 표시
                 if (!entry.stickerEmoji.isNullOrBlank()) {
                     Surface(
                         color = Color.Black.copy(alpha = 0.65f),
@@ -792,7 +986,7 @@ private fun PhotoTimelineItem(
                             shape = RoundedCornerShape(4.dp)
                         ) {
                             Text(
-                                text = "일상 사진 (달력 없음)",
+                                text = "아기 일상 사진",
                                 fontSize = 10.sp,
                                 color = Color(0xFFE65100),
                                 fontWeight = FontWeight.SemiBold,
@@ -802,7 +996,6 @@ private fun PhotoTimelineItem(
                     }
                 }
 
-                // 적용된 스티커 / 축하 자막 배지 표시
                 if (!entry.stickerEmoji.isNullOrBlank() || !entry.customSubtitle.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Surface(
@@ -827,7 +1020,6 @@ private fun PhotoTimelineItem(
                 }
             }
 
-            // [✨ 꾸미기] 버튼 (Idea 04)
             OutlinedButton(
                 onClick = onDecorateClick,
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
@@ -844,7 +1036,6 @@ private fun PhotoTimelineItem(
                 Text("✨ 꾸미기", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE06D53))
             }
 
-            // 사진 교체 버튼
             IconButton(
                 onClick = onSwapClick,
                 colors = IconButtonDefaults.iconButtonColors(

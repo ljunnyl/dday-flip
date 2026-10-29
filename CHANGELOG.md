@@ -5,6 +5,29 @@
 ## [Unreleased]
 
 ### Added
+- **v3.1 스마트폰 실사용 16대 피드백 전면 개선 (크래시/날짜 버그 수정 · ROI 손가락 드래그 · 침대 구도 유사도 · 스마트 검수 썸네일 비교 · 오르골/사용자 BGM 합성)**
+  - **[피드백 1 & 13] 직접 고르기 크래시 해결 & 촬영 날짜 하루 밀림(`2026-05-26`) 버그 수정 (`StartScreen.kt`, `PhotoScanForegroundService.kt`, `MainActivity.kt`)**:
+    - Android 13+ 갤럭시 기기에서 `PickMultipleVisualMedia(150)`이 시스템 상한(100장)을 초과해 발생하던 `IllegalArgumentException`을 인자 없는 `PickMultipleVisualMedia()` 기본 생성자 및 `try-catch` 안전 래퍼(`launchDirectPhotoPickerSafely`)로 해결
+    - `dateTakenLocalDate.atStartOfDay()`(00:00시) 호출로 인해 모든 사진이 새벽(`hour < 4`)으로 판정되어 하루 전날(`2026-05-26`, `D+0`)로 밀리던 치명적 버그를 `atTime(12, 0)`(정오 기준)으로 수정하고, 스캔 시작일을 `birthday.minusDays(1)`로 확장하여 출산 전날 설레며 찍은 사진도 포함 지원
+    - 명시적 달력 표기(`isExplicit == true`)가 없는 단독 숫자는 `rawDday == expectedDday`일 때만 인정하여 엉뚱한 날짜 오인식 및 중복 배치 차단
+  - **[피드백 2 & 9] 달력 영역(ROI) 손가락 드래그 지정 · 스크린샷 자동 제외 · 아기 얼굴 모드 · 침대 구도 유사도 매칭 (`MediaStorePhotoRepository.kt`, `ScanAccuracyMode.kt`, `SceneSimilarityEvaluator.kt`, `StartScreen.kt`)**:
+    - `MediaStoreQueryHelper.isScreenshot` 순수 함수를 분리하여 `"Screenshot"` / `"스크린샷"` 버킷·파일만 기본 제외(`Camera`, `KakaoTalk`, `Download` 보존)
+    - 기준 사진 미리보기 위에서 `pointerInput` + `detectDragGestures`로 달력 ROI 박스를 손가락 드래그하여 직접 그리거나 이동할 수 있는 인터랙티브 캔버스(네 모서리 핸들 및 안내 배너 포함) 구현
+    - `ScanAccuracyMode.BABY_FACE_ONLY`(`👶 아기 얼굴 사진만 찾기`) 및 `SceneSimilarityEvaluator`(4x4 그리드 RGB/Luma 코사인 유사도 + 중앙 영역 아기 피부톤 비율 계산) 도메인 구현, `[📐 기준 사진과 침대/배경 구도 유사도 매칭 켜기]` 스위치 연동
+  - **[피드백 3 & 4] 스플래시 특정 이름 문구 제거 & R01 홈 3트랙/BGM UX 개선 (`SplashScreen.kt`, `StartScreen.kt`)**:
+    - `SplashScreen.kt` 타이틀을 `"디데이 넘김"`, 서브 문구를 `"하루 한 장, 아이가 자라나는 시간의 기록"`으로 변경
+    - `StartScreen.kt` 홈 화면에 `[✨ AI 달력 자동 찾기]`, `[👶 아기 얼굴만 골라 찾기]`, `[🖼️ 내가 직접 사진 고르기]` 3트랙 진입 버튼과 `🎵 배경음악(BGM) 설정 카드`(`오르골 자장가(내장)` / `내 음악 파일 넣기` / `무음`) 배치
+  - **[피드백 5, 6, 7, 8] 아기 사진 찾는 중(`ScanScreen.kt`) 4대 UX 개선**:
+    - 상단 라이브 뷰파인더 카드를 좌우 패딩 없는 풀폭(`fillMaxWidth().height(300.dp)`)으로 확장, 감성 롤링 카피 1줄 고정(`maxLines = 1`), 기계적 상태 배지(`"D+50 사진 분석 중..."`) 제거, `keepScreenOn = true` 화면 꺼짐 방지 적용
+  - **[피드백 11, 12, 14] 스마트 검수(`ReviewScreen.kt`, `PhotoSwapBottomSheet.kt`) 사진 직접 비교 & ±3일/전체 사진첩 교체**:
+    - 달력 미넘김 의심 카드(`ActionableIssueCard`) 내부에 실제 비교 대상 사진 썸네일과 촬영일을 나란히 표시하고 `[둘째 날을 D+N로 변경]` / `[이 날은 뺄게요]` 클릭 시 타임라인에 즉시 반영
+    - 같은 날 여러 장 찍은 후보 사진이 있을 때 자동 복사하지 않고 `"📸 D+N (...)에 찍은 사진 M장 — 어떤 사진을 쓸까요?"` 카드로 썸네일을 가로 나란히 비교·탭 선택하거나 결측일에만 `[빈 날짜에 순서대로 나누기]`를 수행하도록 개선
+    - 타임라인 사진 교체 시 당일 및 앞뒤 ±3일(`minusDays(3)`~`plusDays(3)`) 사진을 당일 우선 정렬로 즉시 노출하고, 바텀시트에 `[📂 전체 사진첩에서 직접 찾기]` 런처 버튼 추가
+  - **[피드백 15 & 16] 영상 제작 중(`ExportingScreen.kt`) 1줄 문구 & 실제 BGM(`BgmAudioMuxer.kt`, `VideoExporter.kt`) 오디오 트랙 합성**:
+    - `ExportingScreen.kt`: 감성 카피 1줄 고정, `keepScreenOn = true` 화면 꺼짐 방지, `BgmMode.MUTE` 여부에 따른 서브 문구 분기
+    - `BgmAudioMuxer.kt`: 내장 오르골 자장가 벨 엔벨로프 화음 PCM 생성(`generateMusicBoxPcm`) 후 `MediaCodec` AAC(44.1kHz, 64kbps) 인코딩 및 사용자 음악 파일(`CUSTOM_FILE`) `MediaExtractor` 패스스루(실패 시 기본 오르골 폴백 및 `try-catch` 안전 격리)를 `MediaMuxer`에 통합
+  > 💡 **의도 (Why & How):** 실제 갤럭시 스마트폰 필드 테스트에서 발견된 16가지 크래시·날짜 밀림·오인식·검수 불편 및 무음 영상 한계를 온디바이스 원칙 안에서 전면 해결하여 실사용 완성도를 대폭 끌어올림.
+
 - **v3.5 피그마 6대 화면 UX 리뉴얼 & 온디바이스 인코딩/스캔 최적화 전면 구현**
   - **테마 3종 & 야간 수유등 다크 모드 (`Theme.kt`, `MainActivity.kt`, `StartScreen.kt`)**:
     - `AppVisualTheme` (`WARM_COTTON` ☁️ 웜 코튼, `MINIMAL_WHITE` 🤍 미니멀 화이트, `DARK_ROOM` 🌙 수유등 다크) 도입 및 홈 상단 원터치 전환 칩 제공

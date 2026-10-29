@@ -15,11 +15,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ddayflip.app.core.domain.CalendarPhotoEntry
+import com.ddayflip.app.domain.video.BgmMode
 import com.ddayflip.app.domain.video.MediaCodecVideoExporter
+import com.ddayflip.app.domain.video.VideoExportConfig
 import com.ddayflip.app.domain.video.VideoExporter
 import com.ddayflip.app.ui.components.ThumbnailImage
 import kotlinx.coroutines.delay
@@ -27,19 +31,30 @@ import java.io.File
 
 /**
  * R05. 영상 만드는 중 화면
- * - 실시간 필름 렌더링 릴 (인코딩 중인 이전/현재/다음 실제 사진 썸네일 노출)
- * - 실시간 잔여 시간 (ETA) & 프레임 진행률
- * - 백그라운드 지속 안내
+ * - 피드백 15: 감성 롤링 카피 1줄 고정 (maxLines = 1, TextOverflow.Ellipsis),
+ *              인코딩 중 화면 꺼짐 방지 (keepScreenOn = true),
+ *              BGM 유무에 따른 정확한 서브 문구 표시
+ * - 피드백 16: VideoExportConfig(bgmMode, customBgmUri)를 VideoExporter에 전달하여 실제 오디오 트랙 합성
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExportingScreen(
     entries: List<CalendarPhotoEntry> = emptyList(),
+    exportConfig: VideoExportConfig = VideoExportConfig(),
     videoExporter: VideoExporter = remember { MediaCodecVideoExporter() },
     onExportComplete: (File) -> Unit = {},
     onCancel: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val view = LocalView.current
+
+    // 인코딩 중 화면 꺼짐 방지
+    DisposableEffect(view) {
+        view.keepScreenOn = true
+        onDispose {
+            view.keepScreenOn = false
+        }
+    }
 
     var exportProgress by remember { mutableFloatStateOf(0f) }
     var currentFrameIndex by remember { mutableIntStateOf(0) }
@@ -47,26 +62,25 @@ fun ExportingScreen(
     var isFailed by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    // 감성 롤링 문구 목록
+    // 1줄 고정 감성 롤링 문구 목록
     val emotionalCopies = listOf(
         "우리 아기의 소중한 순간들을 영화로 엮고 있어요 🎬",
-        "한 장 한 장 예쁜 순간을 착착 이어붙이는 중이에요 ✨",
+        "한 장 한 장 예쁜 표정을 차곡차곡 이어붙이고 있어요 ✨",
         "첫날부터 오늘까지 자라난 기록이 완성되고 있어요 🎞️",
-        "조금만 기다려주세요, 멋진 릴스 영상으로 만들어 드릴게요 💖"
+        "조금만 기다려주세요, 멋진 릴스 영상을 만들고 있어요 💖"
     )
     var currentCopyIndex by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
         startTimeMs = System.currentTimeMillis()
-        // 3.5초마다 감성 카피 롤링
         while (true) {
             delay(3500)
             currentCopyIndex = (currentCopyIndex + 1) % emotionalCopies.size
         }
     }
 
-    // 영상 인코딩 실행
-    LaunchedEffect(entries) {
+    // 영상 인코딩 실행 (exportConfig 전달)
+    LaunchedEffect(entries, exportConfig) {
         if (entries.isEmpty()) {
             isFailed = true
             errorMessage = "인코딩할 사진 목록이 비어있습니다."
@@ -82,6 +96,7 @@ fun ExportingScreen(
             context = context,
             entries = entries,
             outputFile = outputFile,
+            config = exportConfig,
             onProgress = { progress ->
                 exportProgress = progress
                 currentFrameIndex = (progress * entries.size).toInt().coerceAtMost(entries.size)
@@ -156,10 +171,10 @@ fun ExportingScreen(
                             val currEntry = entries.getOrNull(centerIdx)
                             val nextEntry = entries.getOrNull(centerIdx + 1)
 
-                            val activeDday = currEntry?.resolvedDday ?: 100
+                            val activeDday = currEntry?.resolvedDday ?: 1
 
                             FilmFrameItem(
-                                ddayText = "D+${prevEntry?.resolvedDday ?: (activeDday - 1).coerceAtLeast(1)}",
+                                ddayText = "D+${prevEntry?.resolvedDday ?: (activeDday - 1).coerceAtLeast(0)}",
                                 photoUri = prevEntry?.photoUri,
                                 isCurrent = false
                             )
@@ -184,21 +199,30 @@ fun ExportingScreen(
                     }
                 }
 
-                // 감성 롤링 카피
+                // 피드백 15: 감성 롤링 카피 1줄 고정 & BGM 유무에 따른 서브 문구 분기
                 Column(
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
                         text = emotionalCopies[currentCopyIndex],
-                        fontSize = 17.sp,
+                        fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "음악과 날짜 순서에 맞춰 자연스럽게 엮어내고 있어요",
+                        text = if (exportConfig.bgmMode == BgmMode.MUTE) {
+                            "날짜 순서에 맞춰 자연스럽게 엮어내고 있어요"
+                        } else {
+                            "따뜻한 배경음악과 날짜 순서에 맞춰 엮어내고 있어요 🎵"
+                        },
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
@@ -225,7 +249,7 @@ fun ExportingScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
                         Text(
-                            text = "$currentFrameIndex / ${entries.size} 프레임",
+                            text = "$currentFrameIndex / ${entries.size} 장",
                             fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -254,12 +278,16 @@ fun ExportingScreen(
                             },
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = "하드웨어 가속(MediaCodec H.264)으로 초고속 인코딩 진행 중",
                             fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -281,7 +309,7 @@ fun ExportingScreen(
                             tint = Color(0xFF2E7D32)
                         )
                         Text(
-                            text = "📲 화면을 나가거나 다른 앱을 사용하셔도 괜찮아요!\n백그라운드에서 완성 후 폰 갤러리에 자동으로 보관돼요.",
+                            text = "📲 인코딩 중에는 화면이 꺼지지 않도록 유지됩니다.\n완성되면 곧바로 미리보기 화면으로 이동해요.",
                             color = Color(0xFF1B5E20),
                             fontSize = 11.sp,
                             lineHeight = 16.sp
@@ -337,7 +365,6 @@ private fun FilmFrameItem(
                 photoUri = photoUri,
                 modifier = Modifier.fillMaxSize()
             )
-            // 하단 D-day 캡슐 오버레이
             Surface(
                 color = if (isCurrent) Color(0xFFE06D53) else Color.Black.copy(alpha = 0.65f),
                 shape = RoundedCornerShape(50),

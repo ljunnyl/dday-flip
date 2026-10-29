@@ -45,12 +45,22 @@ class MediaCodecVideoExporter : VideoExporter {
         var muxer: MediaMuxer? = null
         var isMuxerStarted = false
         var videoTrackIndex = -1
+        var audioTrackIndex = -1
 
         try {
             // 부모 디렉토리 생성
             outputFile.parentFile?.mkdirs()
             if (outputFile.exists()) {
                 outputFile.delete()
+            }
+
+            // BGM 오디오 트랙 사전 준비 (실패 시 null 반환하여 비디오 인코딩은 중단되지 않도록 안전 격리)
+            val durationMs = config.calculateDurationMs(entries.size)
+            val preparedAudio = try {
+                BgmAudioMuxer.prepareAudioData(context, config, durationMs)
+            } catch (e: Exception) {
+                android.util.Log.w("VideoExporter", "Audio preparation skipped: ${e.message}")
+                null
             }
 
             // H.264 / AVC 비디오 포맷 설정
@@ -106,7 +116,18 @@ class MediaCodecVideoExporter : VideoExporter {
                     var inputIndex = -1
                     while (inputIndex < 0) {
                         inputIndex = encoder.dequeueInputBuffer(10_000)
-                        drainEncoder(encoder, muxer, bufferInfo, isMuxerStarted) { isMuxerStarted = true; videoTrackIndex = it }
+                        drainEncoder(
+                            encoder = encoder,
+                            muxer = muxer,
+                            bufferInfo = bufferInfo,
+                            isMuxerStarted = isMuxerStarted,
+                            videoTrackIndex = videoTrackIndex,
+                            preparedAudio = preparedAudio
+                        ) { vIdx, aIdx ->
+                            isMuxerStarted = true
+                            videoTrackIndex = vIdx
+                            audioTrackIndex = aIdx
+                        }
                     }
 
                     val inputBuffer = encoder.getInputBuffer(inputIndex)
@@ -114,7 +135,18 @@ class MediaCodecVideoExporter : VideoExporter {
                     inputBuffer?.put(nv12Buffer)
                     encoder.queueInputBuffer(inputIndex, 0, nv12BufferSize, ptsUs, 0)
 
-                    drainEncoder(encoder, muxer, bufferInfo, isMuxerStarted) { isMuxerStarted = true; videoTrackIndex = it }
+                    drainEncoder(
+                        encoder = encoder,
+                        muxer = muxer,
+                        bufferInfo = bufferInfo,
+                        isMuxerStarted = isMuxerStarted,
+                        videoTrackIndex = videoTrackIndex,
+                        preparedAudio = preparedAudio
+                    ) { vIdx, aIdx ->
+                        isMuxerStarted = true
+                        videoTrackIndex = vIdx
+                        audioTrackIndex = aIdx
+                    }
 
                     currentFrameIndex++
                     val progress = (currentFrameIndex.toFloat() / totalFrames.toFloat()).coerceIn(0f, 0.95f)
@@ -133,11 +165,39 @@ class MediaCodecVideoExporter : VideoExporter {
                     encoder.queueInputBuffer(inputIndex, 0, 0, ptsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                     eosQueued = true
                 }
-                drainEncoder(encoder, muxer, bufferInfo, isMuxerStarted) { isMuxerStarted = true; videoTrackIndex = it }
+                drainEncoder(
+                    encoder = encoder,
+                    muxer = muxer,
+                    bufferInfo = bufferInfo,
+                    isMuxerStarted = isMuxerStarted,
+                    videoTrackIndex = videoTrackIndex,
+                    preparedAudio = preparedAudio
+                ) { vIdx, aIdx ->
+                    isMuxerStarted = true
+                    videoTrackIndex = vIdx
+                    audioTrackIndex = aIdx
+                }
             }
 
-            // 4. 남은 모든 출력 버퍼 드레인 완료 (최대 100회 시도 후 안전 탈출)
-            drainEncoder(encoder, muxer, bufferInfo, isMuxerStarted, drainAll = true) { isMuxerStarted = true; videoTrackIndex = it }
+            // 4. 남은 모든 출력 버퍼 드레인 완료
+            drainEncoder(
+                encoder = encoder,
+                muxer = muxer,
+                bufferInfo = bufferInfo,
+                isMuxerStarted = isMuxerStarted,
+                videoTrackIndex = videoTrackIndex,
+                preparedAudio = preparedAudio,
+                drainAll = true
+            ) { vIdx, aIdx ->
+                isMuxerStarted = true
+                videoTrackIndex = vIdx
+                audioTrackIndex = aIdx
+            }
+
+            // 5. 오디오 트랙이 추가되어 있다면 오디오 샘플 기록
+            if (isMuxerStarted && audioTrackIndex >= 0 && preparedAudio != null) {
+                BgmAudioMuxer.writeAudioSamplesToMuxer(muxer, audioTrackIndex, preparedAudio)
+            }
 
             withContext(Dispatchers.Main) {
                 onProgress(1.0f)
@@ -177,10 +237,13 @@ class MediaCodecVideoExporter : VideoExporter {
         muxer: MediaMuxer,
         bufferInfo: MediaCodec.BufferInfo,
         isMuxerStarted: Boolean,
+        videoTrackIndex: Int,
+        preparedAudio: BgmAudioMuxer.EncodedAudioData?,
         drainAll: Boolean = false,
-        onMuxerStart: (trackIndex: Int) -> Unit
+        onMuxerStart: (videoTrackIdx: Int, audioTrackIdx: Int) -> Unit
     ) {
         var started = isMuxerStarted
+        var vTrack = videoTrackIndex
         var emptyTries = 0
         val maxEmptyTries = if (drainAll) 80 else 1 // drainAll 모드에서 최대 800ms 대기 후 타임아웃 종료
 
@@ -194,18 +257,28 @@ class MediaCodecVideoExporter : VideoExporter {
             } else if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 if (!started) {
                     val newFormat = encoder.outputFormat
-                    val trackIndex = muxer.addTrack(newFormat)
+                    vTrack = muxer.addTrack(newFormat)
+                    var aTrack = -1
+                    if (preparedAudio != null) {
+                        aTrack = try {
+                            muxer.addTrack(preparedAudio.format)
+                        } catch (e: Exception) {
+                            android.util.Log.w("VideoExporter", "Failed adding audio track: ${e.message}")
+                            -1
+                        }
+                    }
                     muxer.start()
                     started = true
-                    onMuxerStart(trackIndex)
+                    onMuxerStart(vTrack, aTrack)
                 }
             } else if (outputIndex >= 0) {
                 emptyTries = 0 // 새 버퍼를 받았으므로 카운트 리셋
                 val outputBuffer = encoder.getOutputBuffer(outputIndex)
+                val targetTrack = if (vTrack >= 0) vTrack else 0
                 if (outputBuffer != null && (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0 && started && bufferInfo.size > 0) {
                     outputBuffer.position(bufferInfo.offset)
                     outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
-                    muxer.writeSampleData(0, outputBuffer, bufferInfo)
+                    muxer.writeSampleData(targetTrack, outputBuffer, bufferInfo)
                 }
                 encoder.releaseOutputBuffer(outputIndex, false)
 

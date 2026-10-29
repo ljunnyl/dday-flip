@@ -23,6 +23,7 @@ import com.ddayflip.app.core.domain.DdayCalculator
 import com.ddayflip.app.core.domain.DdayStartRule
 import com.ddayflip.app.core.domain.ImageSharpnessEvaluator
 import com.ddayflip.app.core.domain.ScanAccuracyMode
+import com.ddayflip.app.core.domain.SceneSimilarityEvaluator
 import com.ddayflip.app.data.MediaStorePhotoRepository
 import com.ddayflip.app.domain.ocr.DdayScanner
 import com.ddayflip.app.domain.ocr.MlKitDdayScanner
@@ -34,6 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import kotlin.math.abs
 
@@ -100,6 +102,9 @@ class PhotoScanForegroundService : Service() {
             null
         }
 
+        val matchSceneSimilarity = intent.getBooleanExtra(EXTRA_MATCH_SCENE_SIMILARITY, false)
+        val referencePhotoUriStr = intent.getStringExtra(EXTRA_REFERENCE_PHOTO_URI)
+
         if (startDateStr == null || endDateStr == null || birthdayStr == null || ddayRuleStr == null) {
             _scanState.value = ScanServiceState.Error("필수 인자가 누락되었습니다.")
             stopSelf()
@@ -112,7 +117,17 @@ class PhotoScanForegroundService : Service() {
         val ddayRule = DdayStartRule.valueOf(ddayRuleStr)
 
         startForegroundNotification()
-        startScanningJob(startDate, endDate, birthday, ddayRule, todayMaxDday, calendarRoi, accuracyMode)
+        startScanningJob(
+            startDate = startDate,
+            endDate = endDate,
+            birthday = birthday,
+            ddayRule = ddayRule,
+            todayMaxDday = todayMaxDday,
+            calendarRoi = calendarRoi,
+            accuracyMode = accuracyMode,
+            matchSceneSimilarity = matchSceneSimilarity,
+            referencePhotoUriStr = referencePhotoUriStr
+        )
 
         return START_NOT_STICKY
     }
@@ -129,11 +144,23 @@ class PhotoScanForegroundService : Service() {
         ddayRule: DdayStartRule,
         todayMaxDday: Int?,
         calendarRoi: CalendarRoi?,
-        accuracyMode: ScanAccuracyMode
+        accuracyMode: ScanAccuracyMode,
+        matchSceneSimilarity: Boolean,
+        referencePhotoUriStr: String?
     ) {
         scanJob?.cancel()
         scanJob = serviceScope.launch {
-            runPhotoScan(startDate, endDate, birthday, ddayRule, todayMaxDday, calendarRoi, accuracyMode)
+            runPhotoScan(
+                startDate = startDate,
+                endDate = endDate,
+                birthday = birthday,
+                ddayRule = ddayRule,
+                todayMaxDday = todayMaxDday,
+                calendarRoi = calendarRoi,
+                accuracyMode = accuracyMode,
+                matchSceneSimilarity = matchSceneSimilarity,
+                referencePhotoUriStr = referencePhotoUriStr
+            )
         }
     }
 
@@ -144,10 +171,13 @@ class PhotoScanForegroundService : Service() {
         ddayRule: DdayStartRule,
         todayMaxDday: Int?,
         calendarRoi: CalendarRoi?,
-        accuracyMode: ScanAccuracyMode
+        accuracyMode: ScanAccuracyMode,
+        matchSceneSimilarity: Boolean,
+        referencePhotoUriStr: String?
     ) {
         val scanner: DdayScanner = MlKitDdayScanner()
         val sharpnessEvaluator = ImageSharpnessEvaluator()
+        val similarityEvaluator = SceneSimilarityEvaluator()
         try {
             _scanState.value = ScanServiceState.Scanning(
                 processed = 0,
@@ -157,7 +187,29 @@ class PhotoScanForegroundService : Service() {
                 currentStatusText = "갤러리 사진 탐색을 시작합니다..."
             )
 
-            // 1. 미디어스토어에서 대상 기간 사진 조회
+            // 기준 사진 구도 유사도 매칭이 활성화된 경우 기준 특징 벡터 추출
+            val referenceFeatureVector: DoubleArray? = if (matchSceneSimilarity && !referencePhotoUriStr.isNullOrBlank()) {
+                withContext(Dispatchers.IO) {
+                    try {
+                        val refBmp = com.ddayflip.app.util.BitmapUtils.loadOrientedBitmap(
+                            applicationContext,
+                            Uri.parse(referencePhotoUriStr),
+                            400
+                        )
+                        if (refBmp != null) {
+                            val vec = similarityEvaluator.extractFeatureFromBitmap(refBmp)
+                            refBmp.recycle()
+                            vec
+                        } else null
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            } else {
+                null
+            }
+
+            // 1. 미디어스토어에서 대상 기간 사진 조회 (스크린샷 자동 제외됨)
             val repository = MediaStorePhotoRepository(applicationContext)
             val photos = repository.getPhotosBetween(startDate, endDate)
             val total = photos.size
@@ -180,23 +232,27 @@ class PhotoScanForegroundService : Service() {
             var detectedCalendarPhotos = 0
             var lastNotifyTimeMs = 0L
 
-            // 2. 사진별 온디바이스 OCR 분석
+            // 2. 사진별 온디바이스 OCR 및 아기/구도 분석
             for (photo in photos) {
                 processed++
 
+                // 정오(12:00) 기준을 넘겨 자정(00:00) 새벽 컷오프로 인한 날짜 하루 밀림(5/27 -> 5/26) 방지
                 val calcResult = ddayCalculator.calculate(
-                    dateTime = photo.dateTakenLocalDate.atStartOfDay()
+                    dateTime = photo.dateTakenLocalDate.atTime(12, 0)
                 )
                 val expectedDday = calcResult.dday
 
-                var currentStatus = "D+$expectedDday 사진 분석 중..."
+                var currentStatus = "소중한 아기 사진을 살피는 중..."
 
-                val bitmap = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                val bitmap = withContext(Dispatchers.IO) {
                     com.ddayflip.app.util.BitmapUtils.loadOrientedBitmap(applicationContext, photo.contentUri, 1200)
                 }
 
                 var detectedDday: Int? = null
+                var isExplicitCalendarMatch = false
                 var sharpness = 0.0
+                var skinToneRatio = 0.0
+                var sceneSimilarity = 1.0
 
                 if (bitmap != null) {
                     // 선명도 계산 (160x160 그레이스케일 라플라시안 분산)
@@ -214,11 +270,16 @@ class PhotoScanForegroundService : Service() {
                             val b = c and 0xFF
                             grayPixels[i] = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
                         }
-                        if (smallBmp != bitmap) smallBmp.recycle()
                         sharpness = sharpnessEvaluator.calculateLaplacianVariance(grayPixels, smallW, smallH)
+                        skinToneRatio = similarityEvaluator.calculateWarmSkinToneRatio(pixels, smallW, smallH)
+                        if (referenceFeatureVector != null) {
+                            val vec = similarityEvaluator.extractGridFeatureVector(pixels, smallW, smallH)
+                            sceneSimilarity = similarityEvaluator.calculateCosineSimilarity(referenceFeatureVector, vec)
+                        }
+                        if (smallBmp != bitmap) smallBmp.recycle()
                     } catch (_: Exception) {}
 
-                    // 1차 OCR 수행 (ROI 지정 시 ROI 우선 탐색)
+                    // BABY_FACE_ONLY 모드가 아닐 때만 OCR 우선 탐색 수행 (BABY_FACE_ONLY에서도 달력이 있으면 보너스 인식)
                     var ocrResult = scanner.scanDday(bitmap, expectedDay = expectedDday, roi = calendarRoi)
 
                     // HIGH_PRECISION 모드에서 ROI 스캔 결과가 없으면 전체 이미지(roi = null)로 2차 폴백 OCR 수행
@@ -232,45 +293,65 @@ class PhotoScanForegroundService : Service() {
 
                         val effectiveRelaxed = (accuracyMode == ScanAccuracyMode.RELAXED || accuracyMode == ScanAccuracyMode.HIGH_PRECISION)
                         // 유효 D-day 인정 로직:
-                        // 명시적 달력 포맷("D+150", "150일")은 7일 이내 오차 허용.
-                        // 단독 숫자는 의류/장난감 오인식 방지를 위해 예상일과 2일(고정밀은 3일) 이내 일치할 때만 D-day로 인정.
+                        // - 명시적 달력 표기("D+150", "150일", "DAY 150")는 촬영일 기준 3일 이내 오차 허용 (미넘김 감지 지원)
+                        // - 단독 숫자는 옷/장난감/배경 숫자 오인식으로 엉뚱한 D+3, D+4에 중복 배치되는 것을 막기 위해
+                        //   반드시 rawDday == expectedDday 일 때만 인정!
                         val isValidDday = if (ocrResult.isExplicit) {
-                            abs(rawDday - expectedDday) <= 7 || (effectiveRelaxed && rawDday in 1..500)
+                            abs(rawDday - expectedDday) <= 3 || (effectiveRelaxed && abs(rawDday - expectedDday) <= 5)
                         } else {
-                            val tolerance = if (accuracyMode == ScanAccuracyMode.HIGH_PRECISION) 3 else 2
-                            abs(rawDday - expectedDday) <= tolerance
+                            rawDday == expectedDday
                         }
 
                         if (isValidDday) {
                             detectedDday = rawDday
+                            isExplicitCalendarMatch = ocrResult.isExplicit
                             detectedCalendarPhotos++
-                            currentStatus = "D+$detectedDday 감지됨 ✨ (신뢰도 ${(ocrResult.confidence * 100).toInt()}%)"
+                            currentStatus = "D+$detectedDday 달력 발견 ✨"
                         } else {
                             Log.w("DdayScanner", "Photo #${photo.id}: D+$rawDday rejected as noise (expected $expectedDday)")
-                            currentStatus = "D+$expectedDday 사진 분석 중 (노이즈 배제)"
                         }
-                    } else {
-                        Log.d("DdayScanner", "Photo #${photo.id}: No D-day text detected in photo")
                     }
                     bitmap.recycle()
                 }
 
+                // 구도 유사도 매칭 스위치가 켜져 있으면 유사도 점수(>= 0.82)를 만족하거나 명시적 달력이 확인된 사진만 통과
+                val passesSimilarity = if (referenceFeatureVector != null) {
+                    sceneSimilarity >= 0.82 || isExplicitCalendarMatch
+                } else {
+                    true
+                }
+
                 val isConfirmed = (detectedDday != null)
-                val shouldInclude = when (accuracyMode) {
+                val shouldInclude = passesSimilarity && when (accuracyMode) {
                     ScanAccuracyMode.STRICT -> isConfirmed
                     ScanAccuracyMode.RELAXED -> true
                     ScanAccuracyMode.HIGH_PRECISION -> isConfirmed || sharpness >= 80.0
+                    ScanAccuracyMode.BABY_FACE_ONLY -> {
+                        // 아기 피부톤 비율이 충분하거나 선명한 아기 사진을 채택
+                        skinToneRatio >= 0.06 || sharpness >= 50.0 || isConfirmed
+                    }
                 }
 
                 if (shouldInclude) {
+                    // 같은 날 여러 장 찍은 사진이 단독 숫자 오인식 등으로 다른 날짜(D+3, D+4)에 쪼개져 중복 배치되지 않도록
+                    // 달력 미넘김(어제 달력 그대로 D+(expected-1) 찍힌 명시적 달력)인 경우에만 ocrDday를 쓰고 기본은 expectedDday로 정렬 안정화
+                    val finalResolvedDday = if (isExplicitCalendarMatch && detectedDday != null && abs(detectedDday - expectedDday) <= 1) {
+                        detectedDday
+                    } else {
+                        expectedDday
+                    }
+
+                    // 구도 유사도 및 피부톤 가점을 반영한 종합 품질 점수
+                    val effectiveSharpness = sharpness * (0.7 + 0.3 * sceneSimilarity) + (skinToneRatio * 40.0)
+
                     entries.add(
                         CalendarPhotoEntry(
                             id = photo.id.toString(),
                             effectiveDate = calcResult.effectiveDate,
                             exifDday = expectedDday,
                             ocrDday = detectedDday,
-                            resolvedDday = detectedDday ?: expectedDday,
-                            sharpnessScore = sharpness,
+                            resolvedDday = finalResolvedDday,
+                            sharpnessScore = effectiveSharpness,
                             photoUri = photo.contentUri.toString(),
                             isCalendarConfirmed = isConfirmed
                         )
@@ -336,7 +417,7 @@ class PhotoScanForegroundService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("D-day 사진 분석 중")
+            .setContentTitle("아기 사진 찾는 중")
             .setContentText(statusText)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setProgress(total, processed, total == 0)
@@ -357,8 +438,8 @@ class PhotoScanForegroundService : Service() {
         )
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("D-day 사진 분석 완료 ✨")
-            .setContentText("총 ${total}장 중 ${detected}장의 달력 사진을 찾았습니다.")
+            .setContentTitle("아기 사진 선별 완료 ✨")
+            .setContentText("총 ${total}장 중 소중한 사진을 찾았습니다.")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(contentIntent)
             .setAutoCancel(true)
@@ -398,6 +479,8 @@ class PhotoScanForegroundService : Service() {
         const val EXTRA_ROI_Y = "com.ddayflip.app.EXTRA_ROI_Y"
         const val EXTRA_ROI_W = "com.ddayflip.app.EXTRA_ROI_W"
         const val EXTRA_ROI_H = "com.ddayflip.app.EXTRA_ROI_H"
+        const val EXTRA_MATCH_SCENE_SIMILARITY = "com.ddayflip.app.EXTRA_MATCH_SCENE_SIMILARITY"
+        const val EXTRA_REFERENCE_PHOTO_URI = "com.ddayflip.app.EXTRA_REFERENCE_PHOTO_URI"
 
         private val _scanState = MutableStateFlow<ScanServiceState>(ScanServiceState.Idle)
         val scanState: StateFlow<ScanServiceState> = _scanState.asStateFlow()
@@ -410,7 +493,9 @@ class PhotoScanForegroundService : Service() {
             ddayRule: DdayStartRule,
             todayMaxDday: Int? = null,
             calendarRoi: CalendarRoi? = null,
-            accuracyMode: ScanAccuracyMode = ScanAccuracyMode.STRICT
+            accuracyMode: ScanAccuracyMode = ScanAccuracyMode.STRICT,
+            matchSceneSimilarity: Boolean = false,
+            referencePhotoUri: String? = null
         ) {
             val intent = Intent(context, PhotoScanForegroundService::class.java).apply {
                 putExtra(EXTRA_START_DATE, startDate.toString())
@@ -418,6 +503,10 @@ class PhotoScanForegroundService : Service() {
                 putExtra(EXTRA_BIRTHDAY, birthday.toString())
                 putExtra(EXTRA_DDAY_RULE, ddayRule.name)
                 putExtra(EXTRA_ACCURACY_MODE, accuracyMode.name)
+                putExtra(EXTRA_MATCH_SCENE_SIMILARITY, matchSceneSimilarity)
+                if (!referencePhotoUri.isNullOrBlank()) {
+                    putExtra(EXTRA_REFERENCE_PHOTO_URI, referencePhotoUri)
+                }
                 if (todayMaxDday != null) {
                     putExtra(EXTRA_TODAY_MAX_DDAY, todayMaxDday)
                 }
@@ -440,7 +529,9 @@ class PhotoScanForegroundService : Service() {
             ddayRule: DdayStartRule,
             calendarRoi: CalendarRoi?,
             todayMaxDday: Int?,
-            accuracyMode: ScanAccuracyMode = ScanAccuracyMode.STRICT
+            accuracyMode: ScanAccuracyMode = ScanAccuracyMode.STRICT,
+            matchSceneSimilarity: Boolean = false,
+            referencePhotoUri: String? = null
         ) {
             startScan(
                 context = context,
@@ -450,7 +541,9 @@ class PhotoScanForegroundService : Service() {
                 ddayRule = ddayRule,
                 todayMaxDday = todayMaxDday,
                 calendarRoi = calendarRoi,
-                accuracyMode = accuracyMode
+                accuracyMode = accuracyMode,
+                matchSceneSimilarity = matchSceneSimilarity,
+                referencePhotoUri = referencePhotoUri
             )
         }
 
@@ -465,32 +558,5 @@ class PhotoScanForegroundService : Service() {
             ContextCompat.startForegroundService(context, intent)
             _scanState.value = ScanServiceState.Idle
         }
-    }
-}
-
-/**
- * 메모리 절약을 위한 스케일 다운 비트맵 디코딩 헬퍼
- */
-private fun loadScaledBitmap(context: Context, uri: Uri, targetMaxDim: Int = 1200): Bitmap? {
-    return try {
-        context.contentResolver.openInputStream(uri)?.use { stream ->
-            val options = BitmapFactory.Options().apply {
-                inJustDecodeBounds = true
-            }
-            BitmapFactory.decodeStream(stream, null, options)
-            val maxDim = maxOf(options.outWidth, options.outHeight)
-            var sampleSize = 1
-            while (maxDim / (sampleSize * 2) >= targetMaxDim) {
-                sampleSize *= 2
-            }
-            val decodeOptions = BitmapFactory.Options().apply {
-                inSampleSize = sampleSize
-            }
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                BitmapFactory.decodeStream(inputStream, null, decodeOptions)
-            }
-        }
-    } catch (e: Exception) {
-        null
     }
 }

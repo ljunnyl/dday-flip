@@ -1,6 +1,15 @@
 package com.ddayflip.app.domain.video
 
 /**
+ * 영상 배경음악(BGM) 모드
+ */
+enum class BgmMode(val title: String, val description: String) {
+    DEFAULT_MUSIC_BOX("🎵 오르골 자장가(내장)", "따뜻하고 포근한 아기 오르골 멜로디를 함께 넣어요"),
+    CUSTOM_FILE("📂 내 음악 파일 넣기", "내 폰에 저장된 MP3/M4A 음악 파일을 배경음악으로 넣어요"),
+    MUTE("🔇 무음", "배경음악 없이 깔끔한 무음 영상으로 만들어요")
+}
+
+/**
  * D-day 뱃지 오버레이 위치 및 치수 정보 (Canvas/Paint 렌더링에 필요한 사각형 및 텍스트 좌표).
  * 단위 테스트 및 UI 독립성을 위해 순수 좌표 데이터 클래스로 분리.
  */
@@ -41,7 +50,9 @@ data class VideoExportConfig(
     val badgeBackgroundColor: Int = 0xCC1E1E1E.toInt(), // 반투명 짙은 그레이 배경
     val badgeTextColor: Int = 0xFFFFFFFF.toInt(), // 흰색 텍스트
     val bitRate: Int = 8_000_000, // 8 Mbps
-    val iFrameIntervalSeconds: Int = 1 // 1초마다 I-frame
+    val iFrameIntervalSeconds: Int = 1, // 1초마다 I-frame
+    val bgmMode: BgmMode = BgmMode.DEFAULT_MUSIC_BOX,
+    val customBgmUri: String? = null
 ) {
     /**
      * 사진 1장당 노출 프레임 수 (기본 30fps * 0.6s = 18프레임)

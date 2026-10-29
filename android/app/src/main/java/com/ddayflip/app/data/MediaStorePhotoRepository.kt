@@ -60,6 +60,19 @@ object MediaStoreQueryHelper {
         val (startMs, endMs) = calculateDateRangeMillis(startDate, endDate, zoneId)
         return arrayOf(startMs.toString(), endMs.toString())
     }
+
+    /**
+     * 버킷명이나 파일명에 "Screenshot" 또는 "스크린샷"(대소문자 무관)이 포함된 스크린샷 파일인지 판별합니다.
+     * Download, KakaoTalk, Camera 등 일반 폴더는 절대 제외하지 않습니다.
+     */
+    fun isScreenshot(bucketName: String?, displayName: String?): Boolean {
+        val bucket = bucketName ?: ""
+        val name = displayName ?: ""
+        return bucket.contains("screenshot", ignoreCase = true) ||
+            bucket.contains("스크린샷", ignoreCase = true) ||
+            name.contains("screenshot", ignoreCase = true) ||
+            name.contains("스크린샷", ignoreCase = true)
+    }
 }
 
 /**
@@ -84,7 +97,9 @@ class MediaStorePhotoRepository(
             MediaStore.Images.Media.DATE_TAKEN,
             MediaStore.Images.Media.WIDTH,
             MediaStore.Images.Media.HEIGHT,
-            MediaStore.Images.Media.ORIENTATION
+            MediaStore.Images.Media.ORIENTATION,
+            MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
+            MediaStore.Images.Media.DISPLAY_NAME
         )
 
         val selection = MediaStoreQueryHelper.buildSelection()
@@ -105,8 +120,18 @@ class MediaStorePhotoRepository(
             val widthColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
             val heightColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
             val orientationColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.ORIENTATION)
+            val bucketColumn = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+            val displayNameColumn = cursor.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
 
             while (cursor.moveToNext()) {
+                val bucketName = if (bucketColumn >= 0) cursor.getString(bucketColumn) else null
+                val displayName = if (displayNameColumn >= 0) cursor.getString(displayNameColumn) else null
+
+                // 스크린샷 폴더나 스크린샷 파일명은 기본 제외
+                if (MediaStoreQueryHelper.isScreenshot(bucketName, displayName)) {
+                    continue
+                }
+
                 val id = cursor.getLong(idColumn)
                 val dateTakenMs = cursor.getLong(dateTakenColumn)
                 val width = cursor.getInt(widthColumn)
