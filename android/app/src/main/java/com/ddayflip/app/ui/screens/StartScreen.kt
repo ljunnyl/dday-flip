@@ -372,6 +372,20 @@ fun StartScreen(
         }
     }
 
+    var showModePickerSheet by remember { mutableStateOf(false) }
+
+    val calculatedTodayDday = remember(birthdayYear, birthdayMonth, birthdayDay, selectedRule) {
+        val y = birthdayYear.toIntOrNull() ?: 2026
+        val m = (birthdayMonth.toIntOrNull() ?: 5).coerceIn(1, 12)
+        val d = (birthdayDay.toIntOrNull() ?: 27).coerceIn(1, 31)
+        val bday = try {
+            LocalDate.of(y, m, d)
+        } catch (_: Exception) {
+            LocalDate.of(2026, 5, 27)
+        }
+        DdayCalculator(bday, selectedRule).calculate(LocalDateTime.now()).dday
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -385,6 +399,51 @@ fun StartScreen(
                         TextButton(onClick = { isConfigMode = false }) {
                             Text("홈으로", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                         }
+                    } else {
+                        // 상단 미니 오르골 BGM 토글 칩
+                        Surface(
+                            onClick = {
+                                val nextBgm = when (selectedBgmMode) {
+                                    BgmMode.DEFAULT_MUSIC_BOX -> BgmMode.MUTE
+                                    BgmMode.CUSTOM_FILE -> BgmMode.MUTE
+                                    BgmMode.MUTE -> BgmMode.DEFAULT_MUSIC_BOX
+                                }
+                                onBgmConfigChange(nextBgm, customBgmUri)
+                            },
+                            color = if (selectedBgmMode != BgmMode.MUTE) Color(0xFFFFECE5) else MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(50),
+                            modifier = Modifier.padding(end = 6.dp)
+                        ) {
+                            Text(
+                                text = when (selectedBgmMode) {
+                                    BgmMode.DEFAULT_MUSIC_BOX -> "🎵 오르골 ON"
+                                    BgmMode.CUSTOM_FILE -> "🎵 내 음악 ON"
+                                    BgmMode.MUTE -> "🔇 무음"
+                                },
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (selectedBgmMode != BgmMode.MUTE) Color(0xFFE06D53) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+
+                        // 상단 미니 테마 순환 아이콘 버튼
+                        Surface(
+                            onClick = {
+                                val themes = AppVisualTheme.values()
+                                val nextIndex = (themes.indexOf(currentTheme) + 1) % themes.size
+                                onThemeChange(themes[nextIndex])
+                            },
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(50),
+                            modifier = Modifier
+                                .padding(end = 10.dp)
+                                .size(34.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(text = currentTheme.emoji, fontSize = 15.sp)
+                            }
+                        }
                     }
                 }
             )
@@ -392,323 +451,463 @@ fun StartScreen(
     ) { padding ->
         if (!isConfigMode) {
             // ==========================================
-            // R01. 첫 화면 (스튜디오 카드형 홈 & 온보딩 + 테마 3종 + 최근 영상 카드)
+            // R01. 첫 화면 — 시안 3 (갤러리 액자 & 단일 버튼 + 3모드 선택 바텀시트)
             // ==========================================
-            val homeScrollState = rememberScrollState()
+            val recentVideo = latestVideoFile
+            val hasRecentVideo = recentVideo != null && recentVideo.exists()
+
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .verticalScroll(homeScrollState)
-                    .padding(horizontal = 20.dp, vertical = 18.dp),
-                verticalArrangement = Arrangement.SpaceBetween,
-                horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // 중앙 65% 갤러리 액자 영역
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // 상단 테마 3종 선택 칩
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        AppVisualTheme.values().forEach { themeOption ->
-                            FilterChip(
-                                selected = currentTheme == themeOption,
-                                onClick = { onThemeChange(themeOption) },
-                                label = {
-                                    Text(
-                                        text = "${themeOption.emoji} ${themeOption.title}",
-                                        fontSize = 11.sp,
-                                        fontWeight = if (currentTheme == themeOption) FontWeight.Bold else FontWeight.Medium
-                                    )
-                                },
-                                modifier = Modifier.weight(1f)
+                    Card(
+                        shape = RoundedCornerShape(28.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (hasRecentVideo) {
+                                Color(0xFF1F2421)
+                            } else if (currentTheme == AppVisualTheme.DARK_ROOM) {
+                                Color(0xFF1E293B)
+                            } else {
+                                Color(0xFFF3ECE1)
+                            }
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .border(
+                                width = 1.5.dp,
+                                color = if (hasRecentVideo) Color(0xFFE06D53).copy(alpha = 0.45f) else Color(0xFFE6DEC8),
+                                shape = RoundedCornerShape(28.dp)
                             )
+                    ) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (hasRecentVideo && recentVideo != null) {
+                                if (latestVideoThumbnail != null) {
+                                    Image(
+                                        bitmap = latestVideoThumbnail!!.asImageBitmap(),
+                                        contentDescription = "최근 완성한 디데이 릴스",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(Color.Black.copy(alpha = 0.28f))
+                                    )
+                                }
+
+                                // 좌상단 배지
+                                Surface(
+                                    color = Color.Black.copy(alpha = 0.55f),
+                                    shape = RoundedCornerShape(50),
+                                    modifier = Modifier
+                                        .align(Alignment.TopStart)
+                                        .padding(16.dp)
+                                ) {
+                                    Text(
+                                        text = "🎬 최근 완성한 릴스",
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                    )
+                                }
+
+                                // 우상단 D+ 배지
+                                Surface(
+                                    color = Color(0xFFE06D53),
+                                    shape = RoundedCornerShape(50),
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(16.dp)
+                                ) {
+                                    Text(
+                                        text = "D+1 ~ D+$calculatedTodayDday",
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                    )
+                                }
+
+                                // 중앙 큼직한 재생 버튼
+                                Surface(
+                                    onClick = { showVideoPlayerDialog = true },
+                                    color = Color(0xFFE06D53),
+                                    shape = RoundedCornerShape(50),
+                                    shadowElevation = 8.dp,
+                                    modifier = Modifier.size(64.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.PlayArrow,
+                                            contentDescription = "영상 재생",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(34.dp)
+                                        )
+                                    }
+                                }
+
+                                // 하단 공유 버튼 바
+                                Row(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = recentVideo.name,
+                                        color = Color.White.copy(alpha = 0.9f),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Surface(
+                                        onClick = {
+                                            try {
+                                                val contentUri = FileProvider.getUriForFile(
+                                                    context,
+                                                    "${context.packageName}.fileprovider",
+                                                    recentVideo
+                                                )
+                                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                                    type = "video/mp4"
+                                                    putExtra(Intent.EXTRA_STREAM, contentUri)
+                                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                }
+                                                context.startActivity(Intent.createChooser(shareIntent, "디데이 릴스 공유하기"))
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "공유 실패: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        color = Color.White,
+                                        shape = RoundedCornerShape(50)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Share,
+                                                contentDescription = null,
+                                                tint = Color(0xFF1F2421),
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Text(
+                                                text = "📤 카톡 · 릴스 바로 공유",
+                                                color = Color(0xFF1F2421),
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Empty State: 아직 만든 영상이 없을 때 — 따뜻한 폴라로이드 탁상 달력 액자
+                                Surface(
+                                    color = if (currentTheme == AppVisualTheme.DARK_ROOM) Color(0xFF0F172A) else Color.White.copy(alpha = 0.88f),
+                                    shape = RoundedCornerShape(50),
+                                    modifier = Modifier
+                                        .align(Alignment.TopStart)
+                                        .padding(16.dp)
+                                ) {
+                                    Text(
+                                        text = "🎂 오늘 D+$calculatedTodayDday",
+                                        color = Color(0xFFE06D53),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                    )
+                                }
+
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                                    modifier = Modifier.padding(horizontal = 24.dp)
+                                ) {
+                                    Card(
+                                        shape = RoundedCornerShape(22.dp),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = if (currentTheme == AppVisualTheme.DARK_ROOM) Color(0xFF0F172A) else Color.White
+                                        ),
+                                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                                        modifier = Modifier.widthIn(max = 250.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 22.dp, horizontal = 18.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Text(text = "🗓️", fontSize = 36.sp)
+                                            Text(
+                                                text = "D+1 ➔ D+$calculatedTodayDday",
+                                                fontSize = 21.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = Color(0xFFE06D53)
+                                            )
+                                            Text(
+                                                text = "${birthdayYear}.${birthdayMonth}.${birthdayDay} 출생 기준",
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                            HorizontalDivider(
+                                                modifier = Modifier.padding(vertical = 4.dp),
+                                                color = MaterialTheme.colorScheme.surfaceVariant
+                                            )
+                                            Text(
+                                                text = "매일 한 장씩 찍은 사진이\n착착 넘어가는 영화가 돼요",
+                                                fontSize = 12.sp,
+                                                lineHeight = 17.sp,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                fontWeight = FontWeight.SemiBold,
+                                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                            )
+                                        }
+                                    }
+
+                                    Text(
+                                        text = "첫 영상을 만들면 이 액자에서 바로 재생돼요 ✨",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
                         }
                     }
 
-                    // 최근 만든 영상 홈 플레이어 카드
-                    val recentVideo = latestVideoFile
-                    if (recentVideo != null && recentVideo.exists()) {
+                    // 안심 온디바이스 한 줄 캡션
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = null,
+                            tint = Color(0xFF2E7D32),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "100% 온디바이스 · 모든 사진은 내 폰 안에서만 안전하게 처리됩니다",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+
+                // 하단 고정 바텀 도크 (단일 메인 CTA 버튼 1개)
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 6.dp,
+                    shadowElevation = 10.dp,
+                    shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 18.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(width = 36.dp, height = 4.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(MaterialTheme.colorScheme.outlineVariant)
+                        )
+
+                        Button(
+                            onClick = { showModePickerSheet = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
+                            shape = RoundedCornerShape(18.dp)
+                        ) {
+                            Icon(Icons.Default.Movie, contentDescription = null, tint = Color.White)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (hasRecentVideo) "+ 새 디데이 영상 만들기" else "+ 첫 디데이 영상 만들기",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
+            }
+
+            // [+ 디데이 영상 만들기] 터치 시 올라오는 3모드 선택 바텀시트
+            if (showModePickerSheet) {
+                ModalBottomSheet(
+                    onDismissRequest = { showModePickerSheet = false },
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                            .padding(bottom = 28.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            text = "어떤 방식으로 사진을 모을까요?",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "원하는 방식을 고르면 다음 단계로 바로 안내해 드려요.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        // 모드 1: AI 달력 사진 자동 찾기 (추천)
                         Card(
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            onClick = {
+                                showModePickerSheet = false
+                                accuracyMode = ScanAccuracyMode.STRICT
+                                isConfigMode = true
+                            },
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF4EE)),
                             shape = RoundedCornerShape(18.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .border(1.5.dp, Color(0xFFE06D53), RoundedCornerShape(18.dp))
                         ) {
                             Row(
-                                modifier = Modifier.padding(14.dp),
+                                modifier = Modifier.padding(16.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(14.dp)
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(64.dp, 88.dp)
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(Color(0xFF1F2421)),
-                                    contentAlignment = Alignment.Center
+                                Surface(
+                                    color = Color(0xFFE06D53),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.size(44.dp)
                                 ) {
-                                    if (latestVideoThumbnail != null) {
-                                        Image(
-                                            bitmap = latestVideoThumbnail!!.asImageBitmap(),
-                                            contentDescription = "최근 만든 영상 썸네일",
-                                            modifier = Modifier.fillMaxSize(),
-                                            contentScale = ContentScale.Crop
-                                        )
-                                    }
-                                    Surface(
-                                        color = Color.Black.copy(alpha = 0.55f),
-                                        shape = RoundedCornerShape(50)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.PlayArrow,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier
-                                                .padding(6.dp)
-                                                .size(20.dp)
-                                        )
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = Color.White)
                                     }
                                 }
-
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
+                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                     Text(
-                                        text = "🎬 최근 만든 디데이 릴스",
+                                        text = "✨ AI 달력 사진 자동 찾기 (추천)",
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 14.sp,
-                                        color = MaterialTheme.colorScheme.onSurface
+                                        fontSize = 15.sp,
+                                        color = Color(0xFF1F2421)
                                     )
                                     Text(
-                                        text = recentVideo.name,
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        text = "달력 위치와 침대 구도가 비슷한 사진을 하루 1장씩 골라요",
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF6E6A63)
                                     )
-                                    Row(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Button(
-                                            onClick = { showVideoPlayerDialog = true },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                            shape = RoundedCornerShape(8.dp),
-                                            modifier = Modifier.height(34.dp)
-                                        ) {
-                                            Text("▶ 바로 재생", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                                        }
-                                        OutlinedButton(
-                                            onClick = {
-                                                try {
-                                                    val contentUri = FileProvider.getUriForFile(
-                                                        context,
-                                                        "${context.packageName}.fileprovider",
-                                                        recentVideo
-                                                    )
-                                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                                        type = "video/mp4"
-                                                        putExtra(Intent.EXTRA_STREAM, contentUri)
-                                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                                    }
-                                                    context.startActivity(Intent.createChooser(shareIntent, "최근 디데이 릴스 공유하기"))
-                                                } catch (e: Exception) {
-                                                    Toast.makeText(context, "공유 실패: ${e.message}", Toast.LENGTH_SHORT).show()
-                                                }
-                                            },
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                            shape = RoundedCornerShape(8.dp),
-                                            modifier = Modifier.height(34.dp)
-                                        ) {
-                                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(14.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("📤 공유하기", fontSize = 11.sp)
-                                        }
-                                    }
                                 }
                             }
                         }
-                    }
 
-                    // 스튜디오 히어로 배너 카드
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                        shape = RoundedCornerShape(22.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(20.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(72.dp)
-                                    .clip(RoundedCornerShape(18.dp))
-                                    .background(Color(0xFF1F2421)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp, 54.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(Color(0xFFE06D53)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = "D+",
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 20.sp
-                                    )
-                                }
-                            }
-
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(
-                                    text = "하루 한 장, 아이가 자라나는\n시간의 기록 ✨",
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    lineHeight = 24.sp,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "매일 찍은 달력·아기 사진을 날짜순으로 줄 세워 따뜻한 오르골 릴스로 엮어 드려요.",
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    lineHeight = 17.sp
-                                )
-                            }
-                        }
-                    }
-
-                    // 핵심 기능 요약 2열 카드
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
+                        // 모드 2: 아기 얼굴 사진만 골라 찾기
                         Card(
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .border(1.dp, MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp))
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(Icons.Default.Movie, contentDescription = null, tint = Color(0xFFE06D53))
-                                Text("1일 1장 자동 선별", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                Text("스크린샷은 빼고 가장 선명한 컷만 골라요", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .border(1.dp, MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp))
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(Icons.Default.MusicNote, contentDescription = null, tint = Color(0xFFE06D53))
-                                Text("오르골 BGM 합성", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                Text("내장 오르골 자장가와 내 음악 파일을 넣어요", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                    }
-
-                    // 안심 온디바이스 배지
-                    Surface(
-                        color = Color(0xFFE8F5E9),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Lock,
-                                contentDescription = null,
-                                tint = Color(0xFF2E7D32),
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = "100% 온디바이스 · 모든 사진과 영상은 내 폰 안에서만 안전하게 처리됩니다",
-                                color = Color(0xFF1B5E20),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                // 하단 엄지 조작 3트랙 진입 액션 영역
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            accuracyMode = ScanAccuracyMode.STRICT
-                            isConfigMode = true
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(54.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE06D53)),
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        Icon(Icons.Default.CalendarMonth, contentDescription = null, tint = Color.White)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("✨ AI 달력 자동 찾기 (기준 설정)", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
                             onClick = {
+                                showModePickerSheet = false
                                 accuracyMode = ScanAccuracyMode.BABY_FACE_ONLY
                                 isConfigMode = true
                             },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp),
-                            shape = RoundedCornerShape(14.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFE06D53))
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            shape = RoundedCornerShape(18.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.ChildCare, contentDescription = null, tint = Color(0xFFE06D53), modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("👶 아기 얼굴만 찾기", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE06D53))
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surface,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.size(44.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Default.ChildCare, contentDescription = null, tint = Color(0xFFE06D53))
+                                    }
+                                }
+                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        text = "👶 아기 얼굴 사진만 골라 찾기",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "달력이 없어도 아기 얼굴이 나온 대표 사진을 날짜별로 모아요",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
 
-                        OutlinedButton(
-                            onClick = { launchDirectPhotoPickerSafely() },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp),
-                            shape = RoundedCornerShape(14.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.outline)
+                        // 모드 3: 앨범에서 내가 직접 고르기
+                        Card(
+                            onClick = {
+                                showModePickerSheet = false
+                                launchDirectPhotoPickerSafely()
+                            },
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            shape = RoundedCornerShape(18.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("🖼️ 내가 직접 고르기", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surface,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.size(44.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = MaterialTheme.colorScheme.onSurface)
+                                    }
+                                }
+                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        text = "🖼️ 앨범에서 내가 직접 고르기",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "갤러리에서 원하는 사진만 직접 체크해서 바로 영상을 만들어요",
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
                     }
                 }
