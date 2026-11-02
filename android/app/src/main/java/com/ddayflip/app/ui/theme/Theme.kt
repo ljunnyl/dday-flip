@@ -61,8 +61,8 @@ fun DdayFlipTheme(
 ) {
     val colorScheme = when (visualTheme) {
         AppVisualTheme.DARK_ROOM -> DarkRoomColorScheme
-        AppVisualTheme.MINIMAL_WHITE -> if (darkTheme) DarkRoomColorScheme else MinimalWhiteColorScheme
-        AppVisualTheme.WARM_COTTON -> if (darkTheme) DarkRoomColorScheme else WarmCottonColorScheme
+        AppVisualTheme.MINIMAL_WHITE -> MinimalWhiteColorScheme
+        AppVisualTheme.WARM_COTTON -> WarmCottonColorScheme
     }
 
     MaterialTheme(

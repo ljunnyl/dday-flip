@@ -138,7 +138,7 @@ fun ScanScreen(
                 StateDisplay(
                     processed = entries.size,
                     total = entries.size,
-                    detected = entries.count { it.ocrDday != null },
+                    detected = entries.count { it.ocrDday != null || it.isCalendarConfirmed },
                     isComplete = true,
                     isError = false,
                     errorMessage = null
@@ -341,7 +341,19 @@ fun ScanScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = if (detectedCount > 0) "현재까지 달력 사진 $detectedCount 장 발견됨 ✨" else "하루 한 장 가장 또렷한 사진을 고르고 있어요",
+                                text = if (detectedCount > 0) {
+                                    if (accuracyMode == com.ddayflip.app.core.domain.ScanAccuracyMode.BABY_FACE_ONLY) {
+                                        "현재까지 우리 아기 사진 $detectedCount 장 발견됨 👶✨"
+                                    } else {
+                                        "현재까지 달력 사진 $detectedCount 장 발견됨 ✨"
+                                    }
+                                } else {
+                                    if (accuracyMode == com.ddayflip.app.core.domain.ScanAccuracyMode.BABY_FACE_ONLY) {
+                                        "우리 아기 얼굴이 가장 또렷한 사진을 고르고 있어요 👶"
+                                    } else {
+                                        "하루 한 장 가장 또렷한 사진을 고르고 있어요"
+                                    }
+                                },
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,

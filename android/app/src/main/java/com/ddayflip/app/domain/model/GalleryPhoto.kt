@@ -13,6 +13,7 @@ import java.time.LocalDate
  * @param width 이미지 너비(px)
  * @param height 이미지 높이(px)
  * @param orientation 회전 각도(0, 90, 180, 270 등)
+ * @param bucketName 앨범(폴더) 이름 (예: Camera, KakaoTalk, Download 등)
  */
 data class GalleryPhoto(
     val id: Long,
@@ -21,7 +22,8 @@ data class GalleryPhoto(
     val dateTakenLocalDate: LocalDate,
     val width: Int = 0,
     val height: Int = 0,
-    val orientation: Int = 0
+    val orientation: Int = 0,
+    val bucketName: String = "기타"
 ) {
     /**
      * 회전 각도를 감안한 실제 가로 방향 사진 여부

@@ -149,7 +149,8 @@ class MediaStorePhotoRepository(
                         dateTakenLocalDate = dateTakenLocalDate,
                         width = width,
                         height = height,
-                        orientation = orientation
+                        orientation = orientation,
+                        bucketName = bucketName?.takeIf { it.isNotBlank() } ?: "기타"
                     )
                 )
             }

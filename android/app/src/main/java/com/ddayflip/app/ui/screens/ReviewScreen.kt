@@ -967,7 +967,7 @@ private fun PhotoTimelineItem(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    if (entry.isCalendarConfirmed) {
+                    if (entry.ocrDday != null) {
                         Surface(
                             color = Color(0xFFE8F5E9),
                             shape = RoundedCornerShape(4.dp)
@@ -976,6 +976,19 @@ private fun PhotoTimelineItem(
                                 text = "달력 확인됨 ✨",
                                 fontSize = 10.sp,
                                 color = Color(0xFF2E7D32),
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+                        }
+                    } else if (entry.isCalendarConfirmed) {
+                        Surface(
+                            color = Color(0xFFE1F5FE),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = "👶 아기 사진 ✨",
+                                fontSize = 10.sp,
+                                color = Color(0xFF0277BD),
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                             )

@@ -7,7 +7,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
@@ -16,16 +15,19 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.ddayflip.app.MainActivity
 import com.ddayflip.app.R
+import com.ddayflip.app.core.domain.BabyFaceEvaluator
 import com.ddayflip.app.core.domain.CalendarPhotoEntry
 import com.ddayflip.app.core.domain.CalendarRoi
 import com.ddayflip.app.core.domain.CalendarSequenceValidator
 import com.ddayflip.app.core.domain.DdayCalculator
 import com.ddayflip.app.core.domain.DdayStartRule
 import com.ddayflip.app.core.domain.ImageSharpnessEvaluator
+import com.ddayflip.app.core.domain.ReferenceBabyProfile
 import com.ddayflip.app.core.domain.ScanAccuracyMode
 import com.ddayflip.app.core.domain.SceneSimilarityEvaluator
 import com.ddayflip.app.data.MediaStorePhotoRepository
 import com.ddayflip.app.domain.ocr.DdayScanner
+import com.ddayflip.app.domain.ocr.MlKitBabyFaceDetector
 import com.ddayflip.app.domain.ocr.MlKitDdayScanner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -40,7 +42,7 @@ import java.time.LocalDate
 import kotlin.math.abs
 
 /**
- * 갤러리 사진의 D-day 달력 인식 및 OCR 처리를 백그라운드에서 안전하게 수행하는 포그라운드 서비스.
+ * 갤러리 사진의 D-day 달력 인식 및 아기 얼굴 AI 분석을 백그라운드에서 안전하게 수행하는 포그라운드 서비스.
  * 앱이 백그라운드로 전환되거나 화면이 꺼져도 OS에 의해 강제 종료되지 않고 끝까지 분석을 완료합니다.
  */
 class PhotoScanForegroundService : Service() {
@@ -178,6 +180,8 @@ class PhotoScanForegroundService : Service() {
         val scanner: DdayScanner = MlKitDdayScanner()
         val sharpnessEvaluator = ImageSharpnessEvaluator()
         val similarityEvaluator = SceneSimilarityEvaluator()
+        val babyFaceDetector = MlKitBabyFaceDetector(similarityEvaluator)
+        val babyFaceEvaluator = BabyFaceEvaluator(similarityEvaluator)
         try {
             _scanState.value = ScanServiceState.Scanning(
                 processed = 0,
@@ -187,26 +191,30 @@ class PhotoScanForegroundService : Service() {
                 currentStatusText = "갤러리 사진 탐색을 시작합니다..."
             )
 
-            // 기준 사진 구도 유사도 매칭이 활성화된 경우 기준 특징 벡터 추출
-            val referenceFeatureVector: DoubleArray? = if (matchSceneSimilarity && !referencePhotoUriStr.isNullOrBlank()) {
+            // 기준 사진이 등록된 경우:
+            // - 달력 모드: 침대/배경 구도 유사도 특징 벡터 추출
+            // - 아기 얼굴 전용 모드: 기준 사진에서 '우리 아기 얼굴 고유 프로필(ReferenceBabyProfile)' 추출 (성인 사진 배제용)
+            var referenceFeatureVector: DoubleArray? = null
+            var referenceBabyProfile: ReferenceBabyProfile? = null
+            if (!referencePhotoUriStr.isNullOrBlank()) {
                 withContext(Dispatchers.IO) {
                     try {
                         val refBmp = com.ddayflip.app.util.BitmapUtils.loadOrientedBitmap(
                             applicationContext,
                             Uri.parse(referencePhotoUriStr),
-                            400
+                            640
                         )
                         if (refBmp != null) {
-                            val vec = similarityEvaluator.extractFeatureFromBitmap(refBmp)
+                            if (matchSceneSimilarity) {
+                                referenceFeatureVector = similarityEvaluator.extractFeatureFromBitmap(refBmp)
+                            }
+                            if (accuracyMode == ScanAccuracyMode.BABY_FACE_ONLY) {
+                                referenceBabyProfile = babyFaceDetector.extractReferenceProfile(refBmp)
+                            }
                             refBmp.recycle()
-                            vec
-                        } else null
-                    } catch (_: Exception) {
-                        null
-                    }
+                        }
+                    } catch (_: Exception) {}
                 }
-            } else {
-                null
             }
 
             // 1. 미디어스토어에서 대상 기간 사진 조회 (스크린샷 자동 제외됨)
@@ -232,7 +240,7 @@ class PhotoScanForegroundService : Service() {
             var detectedCalendarPhotos = 0
             var lastNotifyTimeMs = 0L
 
-            // 2. 사진별 온디바이스 OCR 및 아기/구도 분석
+            // 2. 사진별 온디바이스 OCR 및 아기 얼굴/구도 분석
             for (photo in photos) {
                 processed++
 
@@ -244,12 +252,16 @@ class PhotoScanForegroundService : Service() {
 
                 var currentStatus = "소중한 아기 사진을 살피는 중..."
 
+                // BABY_FACE_ONLY 모드에서는 달력 OCR이 불필요하므로 640px 경량 디코딩으로 스캔 속도를 대폭 높임
+                val decodeMaxDim = if (accuracyMode == ScanAccuracyMode.BABY_FACE_ONLY) 640 else 1200
                 val bitmap = withContext(Dispatchers.IO) {
-                    com.ddayflip.app.util.BitmapUtils.loadOrientedBitmap(applicationContext, photo.contentUri, 1200)
+                    com.ddayflip.app.util.BitmapUtils.loadOrientedBitmap(applicationContext, photo.contentUri, decodeMaxDim)
                 }
 
                 var detectedDday: Int? = null
                 var isExplicitCalendarMatch = false
+                var isBabyFaceAccepted = false
+                var babyFaceTotalScore = 0.0
                 var sharpness = 0.0
                 var skinToneRatio = 0.0
                 var sceneSimilarity = 1.0
@@ -272,43 +284,55 @@ class PhotoScanForegroundService : Service() {
                         }
                         sharpness = sharpnessEvaluator.calculateLaplacianVariance(grayPixels, smallW, smallH)
                         skinToneRatio = similarityEvaluator.calculateWarmSkinToneRatio(pixels, smallW, smallH)
-                        if (referenceFeatureVector != null) {
+                        val refVec = referenceFeatureVector
+                        if (refVec != null) {
                             val vec = similarityEvaluator.extractGridFeatureVector(pixels, smallW, smallH)
-                            sceneSimilarity = similarityEvaluator.calculateCosineSimilarity(referenceFeatureVector, vec)
+                            sceneSimilarity = similarityEvaluator.calculateCosineSimilarity(refVec, vec)
                         }
                         if (smallBmp != bitmap) smallBmp.recycle()
                     } catch (_: Exception) {}
 
-                    // BABY_FACE_ONLY 모드가 아닐 때만 OCR 우선 탐색 수행 (BABY_FACE_ONLY에서도 달력이 있으면 보너스 인식)
-                    var ocrResult = scanner.scanDday(bitmap, expectedDay = expectedDday, roi = calendarRoi)
+                    if (accuracyMode == ScanAccuracyMode.BABY_FACE_ONLY) {
+                        // 아기 얼굴 전용 모드: 달력 OCR을 완전히 스킵하고 온디바이스 얼굴 인식 AI + 기준 아기 얼굴 비교 수행!
+                        val detectedFaces = babyFaceDetector.detectFaces(bitmap)
+                        val faceEval = babyFaceEvaluator.evaluatePhotoFaces(
+                            faces = detectedFaces,
+                            referenceProfile = referenceBabyProfile,
+                            sharpness = sharpness
+                        )
+                        if (faceEval.isAcceptedBabyPhoto) {
+                            isBabyFaceAccepted = true
+                            babyFaceTotalScore = faceEval.totalScore
+                            detectedCalendarPhotos++
+                            currentStatus = "사랑스러운 우리 아기 얼굴 발견 👶✨"
+                        }
+                    } else {
+                        // 달력 탐색 모드들(STRICT, HIGH_PRECISION, RELAXED)에서만 OCR 수행
+                        var ocrResult = scanner.scanDday(bitmap, expectedDay = expectedDday, roi = calendarRoi)
 
-                    // HIGH_PRECISION 모드에서 ROI 스캔 결과가 없으면 전체 이미지(roi = null)로 2차 폴백 OCR 수행
-                    if (accuracyMode == ScanAccuracyMode.HIGH_PRECISION && calendarRoi != null && ocrResult == null) {
-                        ocrResult = scanner.scanDday(bitmap, expectedDay = expectedDday, roi = null)
-                    }
-
-                    if (ocrResult != null) {
-                        val rawDday = ocrResult.dday
-                        Log.d("DdayScanner", "Photo #${photo.id}: OCR found D+$rawDday (explicit: ${ocrResult.isExplicit}, expected: $expectedDday, conf: ${ocrResult.confidence})")
-
-                        val effectiveRelaxed = (accuracyMode == ScanAccuracyMode.RELAXED || accuracyMode == ScanAccuracyMode.HIGH_PRECISION)
-                        // 유효 D-day 인정 로직:
-                        // - 명시적 달력 표기("D+150", "150일", "DAY 150")는 촬영일 기준 3일 이내 오차 허용 (미넘김 감지 지원)
-                        // - 단독 숫자는 옷/장난감/배경 숫자 오인식으로 엉뚱한 D+3, D+4에 중복 배치되는 것을 막기 위해
-                        //   반드시 rawDday == expectedDday 일 때만 인정!
-                        val isValidDday = if (ocrResult.isExplicit) {
-                            abs(rawDday - expectedDday) <= 3 || (effectiveRelaxed && abs(rawDday - expectedDday) <= 5)
-                        } else {
-                            rawDday == expectedDday
+                        if (accuracyMode == ScanAccuracyMode.HIGH_PRECISION && calendarRoi != null && ocrResult == null) {
+                            ocrResult = scanner.scanDday(bitmap, expectedDay = expectedDday, roi = null)
                         }
 
-                        if (isValidDday) {
-                            detectedDday = rawDday
-                            isExplicitCalendarMatch = ocrResult.isExplicit
-                            detectedCalendarPhotos++
-                            currentStatus = "D+$detectedDday 달력 발견 ✨"
-                        } else {
-                            Log.w("DdayScanner", "Photo #${photo.id}: D+$rawDday rejected as noise (expected $expectedDday)")
+                        if (ocrResult != null) {
+                            val rawDday = ocrResult.dday
+                            Log.d("DdayScanner", "Photo #${photo.id}: OCR found D+$rawDday (explicit: ${ocrResult.isExplicit}, expected: $expectedDday, conf: ${ocrResult.confidence})")
+
+                            val effectiveRelaxed = (accuracyMode == ScanAccuracyMode.RELAXED || accuracyMode == ScanAccuracyMode.HIGH_PRECISION)
+                            val isValidDday = if (ocrResult.isExplicit) {
+                                abs(rawDday - expectedDday) <= 3 || (effectiveRelaxed && abs(rawDday - expectedDday) <= 5)
+                            } else {
+                                rawDday == expectedDday
+                            }
+
+                            if (isValidDday) {
+                                detectedDday = rawDday
+                                isExplicitCalendarMatch = ocrResult.isExplicit
+                                detectedCalendarPhotos++
+                                currentStatus = "D+$detectedDday 달력 발견 ✨"
+                            } else {
+                                Log.w("DdayScanner", "Photo #${photo.id}: D+$rawDday rejected as noise (expected $expectedDday)")
+                            }
                         }
                     }
                     bitmap.recycle()
@@ -316,33 +340,34 @@ class PhotoScanForegroundService : Service() {
 
                 // 구도 유사도 매칭 스위치가 켜져 있으면 유사도 점수(>= 0.82)를 만족하거나 명시적 달력이 확인된 사진만 통과
                 val passesSimilarity = if (referenceFeatureVector != null) {
-                    sceneSimilarity >= 0.82 || isExplicitCalendarMatch
+                    sceneSimilarity >= 0.82 || isExplicitCalendarMatch || isBabyFaceAccepted
                 } else {
                     true
                 }
 
-                val isConfirmed = (detectedDday != null)
+                val isConfirmed = (detectedDday != null) || isBabyFaceAccepted
                 val shouldInclude = passesSimilarity && when (accuracyMode) {
-                    ScanAccuracyMode.STRICT -> isConfirmed
+                    ScanAccuracyMode.STRICT -> detectedDday != null
                     ScanAccuracyMode.RELAXED -> true
-                    ScanAccuracyMode.HIGH_PRECISION -> isConfirmed || sharpness >= 80.0
+                    ScanAccuracyMode.HIGH_PRECISION -> detectedDday != null || sharpness >= 80.0
                     ScanAccuracyMode.BABY_FACE_ONLY -> {
-                        // 아기 피부톤 비율이 충분하거나 선명한 아기 사진을 채택
-                        skinToneRatio >= 0.06 || sharpness >= 50.0 || isConfirmed
+                        // ML Kit 얼굴 인식 + 기준 아기 프로필 비교를 통과한 사진 채택
+                        isBabyFaceAccepted
                     }
                 }
 
                 if (shouldInclude) {
-                    // 같은 날 여러 장 찍은 사진이 단독 숫자 오인식 등으로 다른 날짜(D+3, D+4)에 쪼개져 중복 배치되지 않도록
-                    // 달력 미넘김(어제 달력 그대로 D+(expected-1) 찍힌 명시적 달력)인 경우에만 ocrDday를 쓰고 기본은 expectedDday로 정렬 안정화
                     val finalResolvedDday = if (isExplicitCalendarMatch && detectedDday != null && abs(detectedDday - expectedDday) <= 1) {
                         detectedDday
                     } else {
                         expectedDday
                     }
 
-                    // 구도 유사도 및 피부톤 가점을 반영한 종합 품질 점수
-                    val effectiveSharpness = sharpness * (0.7 + 0.3 * sceneSimilarity) + (skinToneRatio * 40.0)
+                    val effectiveSharpness = if (accuracyMode == ScanAccuracyMode.BABY_FACE_ONLY) {
+                        babyFaceTotalScore
+                    } else {
+                        sharpness * (0.7 + 0.3 * sceneSimilarity) + (skinToneRatio * 40.0)
+                    }
 
                     entries.add(
                         CalendarPhotoEntry(
@@ -367,7 +392,6 @@ class PhotoScanForegroundService : Service() {
                     currentPhotoUri = photo.contentUri.toString()
                 )
 
-                // 알림 IPC 스로틀링: 500ms 이상 경과했거나 마지막 사진일 때만 호출하여 시스템 부하 방지
                 val now = System.currentTimeMillis()
                 if (now - lastNotifyTimeMs >= 500L || processed == total) {
                     lastNotifyTimeMs = now
@@ -386,12 +410,12 @@ class PhotoScanForegroundService : Service() {
             _scanState.value = ScanServiceState.Completed(result)
             showCompletionNotification(total, detectedCalendarPhotos)
         } catch (e: CancellationException) {
-            // 취소 시 상태 초기화
             _scanState.value = ScanServiceState.Idle
         } catch (e: Exception) {
             _scanState.value = ScanServiceState.Error(e.message ?: "사진 분석 중 오류 발생")
         } finally {
             scanner.close()
+            babyFaceDetector.close()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }

@@ -12,8 +12,8 @@ android {
         applicationId = "com.ddayflip.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "3.1.1"
+        versionCode = 7
+        versionName = "3.2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -65,8 +65,9 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material:material-icons-extended")
 
-    // Google ML Kit Text Recognition (On-device)
+    // Google ML Kit Text Recognition & Face Detection (On-device)
     implementation("com.google.mlkit:text-recognition-korean:16.0.1")
+    implementation("com.google.mlkit:face-detection:16.1.7")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
 
     // Media3 (Transformer, ExoPlayer, UI)

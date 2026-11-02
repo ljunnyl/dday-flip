@@ -2,7 +2,36 @@
 
 이 프로젝트의 변경 내용을 기록한다. 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/), 버전은 시맨틱 버전을 따른다.
 
-## [Unreleased]
+## [v3.2.1] - 2026-10-31
+
+### Fixed
+- **첫 화면 상단 테마 버튼 무반응 및 시스템 다크모드 충돌 해결 (`Theme.kt`, `StartScreen.kt`)**:
+  - `Theme.kt`에서 시스템 다크모드가 켜져 있을 때 사용자가 선택한 `AppVisualTheme`(`WARM_COTTON`, `MINIMAL_WHITE`)이 강제로 `DarkRoomColorScheme`으로 덮어써지던 버그 수정.
+  - 상단 테마 순환 버튼 클릭 시 토스트 피드백(`"☁️ 웜 코튼 테마로 변경되었습니다"`) 제공 및 중앙 액자 카드 배경색을 테마 팔레트에 맞게 즉각 반영.
+- **수집 모드별 '달력' 잔재 문구 및 타임라인 배지 분리 (`ScanScreen.kt`, `ReviewScreen.kt`, `CalendarSequenceValidator.kt`)**:
+  - `ScanScreen`: `BABY_FACE_ONLY` 모드 스캔 시 `"현재까지 우리 아기 사진 N장 발견됨 👶✨"`으로 문구 분기 및 완료 카운트 집계 정상화.
+  - `ReviewScreen`: 달력 OCR 숫자가 실제로 읽힌 경우(`ocrDday != null`)에만 `"달력 확인됨 ✨"` 배지 노출, 아기 얼굴/직접 선택 모드 사진은 `"👶 아기 사진 ✨"` 배지로 분기.
+  - `CalendarSequenceValidator`: 달력 미넘김(`UNFLIPPED_CALENDAR`) 감지 시 두 사진 모두 달력 OCR 숫자가 실제로 읽혔을 때만 발동하도록 오인식 방지.
+
+### Added
+- **날짜별 직접 고르기(R02-C) 인접 날짜 사진 길게 누르기 이동 및 자동 승격(`auto-replenish`) (`DayByDayDirectPickerHelper.kt`, `DirectDayByDayPickerContent.kt`, `BabyFaceAndDirectPickerTest.kt`)**:
+  - **사진 길게 누르기(Long Press) 이동 다이얼로그**: 특정 날짜(예: 7/4) 사진을 길게 누르면 👈 어제(7/3) 또는 👉 내일(7/5)로 바로 이동시킬 수 있는 팝업 노출 (빈 날짜는 녹색 강조).
+  - **빈 날짜 퀵 끌어오기 원터치 칩**: 사진 없는 날(7/3) 카드 상단에 `[👈 어제(D+N-1) 끌어오기]` `[👉 내일(D+N+1) 끌어오기]` 칩을 제공하여 즉각적으로 사진을 끌어올 수 있도록 지원.
+  - **자동 보충(`auto-replenish`)**: 특정 날짜의 대표 사진을 다른 날로 이동시켰을 때, 원래 날짜에 여유분 사진이 남아있다면 다음 순위 사진이 대표로 자동 승격되어 원래 날짜가 비지 않도록 똑똑하게 보존.
+
+## [v3.2.0] - 2026-10-31
+
+### Added
+- **아기 얼굴 전용 온디바이스 AI(`ML Kit Face Detection` + 성인 구분 기준 사진 1장) & 날짜별(`D+1~D+N`) 구분 직접 고르기 + 빈 날짜 앞뒤 사진 끌어오기 (`BabyFaceEvaluator.kt`, `MlKitBabyFaceDetector.kt`, `DayByDayDirectPickerHelper.kt`, `DirectDayByDayPickerContent.kt`, `StartScreen.kt`, `PhotoScanForegroundService.kt`)**:
+  - **`👶 아기 얼굴 사진만 골라 찾기` 전용 화면 및 얼굴 인식 AI 분리**:
+    - 아기 얼굴 모드 진입 시 불필요했던 '달력 영역 드래그 지정' 카드를 완전히 제거하고 **`👶 우리 아기 얼굴 기준 사진 1장 등록 (어른 사진과 구분용)`** 카드로 개편
+    - 온디바이스 `com.google.mlkit:face-detection:16.1.7` 및 `BabyFaceEvaluator`를 도입하여, 기준 아기 사진 1장의 얼굴 특징 벡터와 아기 두상/이목구비 비례를 기반으로 성인 셀카·타인 사진을 배제하고 눈 뜸·미소·선명도가 가장 높은 우리 아기 대표 사진을 선별
+    - `PhotoScanForegroundService`에서 `BABY_FACE_ONLY` 모드 시 달력 OCR(`scanner.scanDday`)을 완전 스킵하고 `640px` 경량 디코딩을 적용해 스캔 속도 대폭 향상
+  - **`🖼️ 날짜별로 보며 내가 직접 고르기` (`DirectDayByDayPickerContent`) 신설**:
+    - 기존 100장 제한 및 구글 포토 하단창이 뜨던 `PickMultipleVisualMedia()`를 대체하여, 앱 안에서 `D+1`부터 오늘까지 **날짜별로 사진을 미리 칸칸이 구분**해 보여주는 전용 선택 화면 구축 (장수 제한 무제한)
+    - 각 날짜마다 메타데이터 점수(카메라 원본 폴더, 9:16 세로 비율, 해상도, 낮 시간대 촬영)가 가장 높은 사진 1장을 자동 프리체크(`✅`)하여, 150장을 일일이 누를 필요 없이 바꿀 날짜만 터치해 교체하도록 개선
+    - **사진 없는 빈 날(`isEmptyDay`) 앞뒤 날짜(±3일) 남는 사진 끌어오기**: 깜빡하고 사진을 안 찍은 날 칸에는 앞뒤 ±3일 내에 여러 장 찍어둔 여유분 사진(`nearbyPullCandidates`)을 바로 노출하고, 상단 `[빈 날짜 앞뒤 사진으로 한번에 채우기 ✨]` 원터치 버튼으로도 빈 날짜를 즉시 채울 수 있도록 구현
+  > 💡 **의도 (Why & How):** 아기 얼굴 찾기 모드에서 달력 영역을 지정하라고 하던 UX 모순과 성인 사진 혼입 문제를 '기준 아기 사진 1장 + 온디바이스 얼굴 인식 AI'로 해결하고, 최소 100장 이상을 골라야 하는 직접 선택 모드에서 구글 포토 하단창의 100장 한계를 넘어 날짜별 묶음 확인과 빈 날짜 앞뒤 사진 끌어오기가 한 화면에서 이루어지도록 개선.
 
 ### Changed
 - **R01 첫 화면 UX/UI 안정화 — 시안 3 (갤러리 액자 & 단일 버튼 + 3모드 선택 바텀시트) 적용 (`StartScreen.kt`)**:

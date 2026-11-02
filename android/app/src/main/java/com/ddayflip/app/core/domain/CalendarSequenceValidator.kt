@@ -119,15 +119,18 @@ class CalendarSequenceValidator {
             val current = sortedEntries[i]
             val next = sortedEntries[i + 1]
 
-            val currentCalendarDay = current.ocrDday ?: current.resolvedDday
-            val nextCalendarDay = next.ocrDday ?: next.resolvedDday
+            val currentOcr = current.ocrDday
+            val nextOcr = next.ocrDday
 
-            if (current.effectiveDate != next.effectiveDate && currentCalendarDay == nextCalendarDay) {
+            if (currentOcr != null && nextOcr != null &&
+                current.effectiveDate != next.effectiveDate &&
+                currentOcr == nextOcr
+            ) {
                 issues.add(
                     SequenceIssue(
                         type = IssueType.UNFLIPPED_CALENDAR,
-                        targetDday = nextCalendarDay,
-                        description = "D-day 달력 미넘김 의심: ${current.effectiveDate}와 ${next.effectiveDate}의 D-day 달력이 모두 D+$nextCalendarDay 입니다.",
+                        targetDday = nextOcr,
+                        description = "D-day 달력 미넘김 의심: ${current.effectiveDate}와 ${next.effectiveDate}의 D-day 달력이 모두 D+$nextOcr 입니다.",
                         relatedEntryIds = listOf(current.id, next.id)
                     )
                 )

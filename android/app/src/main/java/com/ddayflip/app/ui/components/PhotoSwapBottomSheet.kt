@@ -3,6 +3,7 @@ package com.ddayflip.app.ui.components
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import android.util.LruCache
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -38,6 +39,23 @@ import com.ddayflip.app.domain.model.GalleryPhoto
 import com.ddayflip.app.util.BitmapUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+/**
+ * 인메모리 썸네일 LruCache (최대 240장 보관하여 대량 스크롤 시 재디코딩 제거)
+ */
+private object ThumbnailMemoryCache {
+    private val cache = LruCache<String, Bitmap>(240)
+
+    fun get(key: String): Bitmap? = synchronized(cache) {
+        cache.get(key)?.takeIf { !it.isRecycled }
+    }
+
+    fun put(key: String, bmp: Bitmap) = synchronized(cache) {
+        if (!bmp.isRecycled) {
+            cache.put(key, bmp)
+        }
+    }
+}
 
 /**
  * 특정 날짜의 사진을 1초 만에 다른 컷으로 맞교환하는 인스턴트 바텀시트
@@ -275,7 +293,7 @@ fun PhotoSwapBottomSheet(
 }
 
 /**
- * 시스템 ContentResolver 캐시 및 백그라운드 스케일 다운 썸네일 컴포저블
+ * 시스템 ContentResolver 캐시 + 인메모리 LruCache 기반 백그라운드 스케일 다운 썸네일 컴포저블
  */
 @Composable
 fun ThumbnailImage(
@@ -283,20 +301,26 @@ fun ThumbnailImage(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
+    val cacheKey = remember(uri) { uri.toString() }
+    var bitmap by remember(cacheKey) { mutableStateOf(ThumbnailMemoryCache.get(cacheKey)) }
 
-    LaunchedEffect(uri) {
-        withContext(Dispatchers.IO) {
-            val bmp = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                try {
-                    context.contentResolver.loadThumbnail(uri, android.util.Size(260, 260), null)
-                } catch (_: Exception) {
+    LaunchedEffect(cacheKey) {
+        if (bitmap == null) {
+            withContext(Dispatchers.IO) {
+                val bmp = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    try {
+                        context.contentResolver.loadThumbnail(uri, android.util.Size(260, 260), null)
+                    } catch (_: Exception) {
+                        BitmapUtils.loadOrientedBitmap(context, uri, 260)
+                    }
+                } else {
                     BitmapUtils.loadOrientedBitmap(context, uri, 260)
                 }
-            } else {
-                BitmapUtils.loadOrientedBitmap(context, uri, 260)
+                if (bmp != null) {
+                    ThumbnailMemoryCache.put(cacheKey, bmp)
+                }
+                bitmap = bmp
             }
-            bitmap = bmp
         }
     }
 
